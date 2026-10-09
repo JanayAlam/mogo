@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.venv/
+__pycache__/
+*.egg-info/
+node_modules/
+frontend/dist/
+.pytest_cache/

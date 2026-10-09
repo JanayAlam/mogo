@@ -1,0 +1,46 @@
+name: run-agent
+# Dispatched by the mogo API when EXECUTION_MODE=actions.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: mogo run id (row in the runs table)
+        required: true
+
+concurrency:
+  group: mogo-${{ inputs.run_id }}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: pip install -e backend
+      - name: Run agent
+        working-directory: backend
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+          GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Optional: a tunnel URL (Tailscale / cloudflared) to your local LLM server.
+          LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL }}
+          LOCAL_LLM_MODEL: ${{ vars.LOCAL_LLM_MODEL }}
+          # Every Actions secret, as JSON. The runner forwards only the names a repo lists under `env_from`
+          # in repos.yaml (test keys for the code under test). Add such secrets in Settings > Secrets.
+          MOGO_SECRETS_JSON: ${{ toJSON(secrets) }}
+          ENVIRONMENT: actions
+          REPOS_FILE: ../repos.yaml
+        run: python -m mogo.runner "$RUN_ID"
