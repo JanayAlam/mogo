@@ -35,7 +35,8 @@ def tool_call(name, args, id_="c1"):
 
 
 class FakeLLM:
-    """Scripted OpenAI-style client: each entry is a list of tool calls (or [] for plain text)."""
+    """Scripted OpenAI-style client: each entry is a list of tool calls, [] for an empty reply, or a str for a
+    plain-text reply (no tool_calls)."""
 
     def __init__(self, script):
         self.script = list(script)
@@ -48,5 +49,8 @@ class FakeLLM:
         if not self.first_user_prompt:
             self.first_user_prompt = kw["messages"][1]["content"]
         calls = self.script.pop(0) if self.script else []
-        msg = SimpleNamespace(content="", tool_calls=calls or None)
+        if isinstance(calls, str):
+            msg = SimpleNamespace(content=calls, tool_calls=None)
+        else:
+            msg = SimpleNamespace(content="", tool_calls=calls or None)
         return SimpleNamespace(choices=[SimpleNamespace(message=msg)])

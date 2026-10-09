@@ -17,9 +17,12 @@ repos:
     # The repo has no automated test runner (test/ only holds JSON fixtures), so there is no test_cmd.
     # The agent verifies features by calling the running API and reading the development database.
     # Postgres is remote (ANTROTRIP_SERVER_DATABASE_URL); only Valkey runs locally.
+    # Docker Hub pulls from Actions time out now and then, so the pull is retried before giving up.
     services_cmd: >-
       docker rm -f mogo-valkey >/dev/null 2>&1;
-      docker run -d --rm --name mogo-valkey -p 6379:6379 valkey/valkey:latest
+      for i in 1 2 3 4; do docker pull -q valkey/valkey:8 && break; echo "pull failed, retry $i"; sleep $((i * 5)); done;
+      docker run -d --rm --name mogo-valkey -p 6379:6379 valkey/valkey:8
+      && for j in $(seq 30); do docker exec mogo-valkey valkey-cli ping >/dev/null 2>&1 && break; sleep 1; done
     services_down: docker rm -f mogo-valkey
     # DATABASE_URL is the shared development database: mogo never migrates, seeds or resets it.
     # A PR that adds a Prisma migration therefore runs against the old schema; the agent reports that as unverified.

@@ -112,6 +112,8 @@ def execute_run(
         for cmd in cfg.gates:
             code, out = sandbox.run_cmd(cmd, root, env=repo_env)
             gates.append(GateResult(cmd=cmd, ok=code == 0, output=sandbox.tail(out, 1500)))
+            if code:
+                rec(f"gate failed (exit {code}): `{cmd}`\n{sandbox.tail(out, 800)}", "warn")
         if gates:
             rec(f"gates: {sum(g.ok for g in gates)}/{len(gates)} passed")
 
@@ -135,7 +137,12 @@ def execute_run(
                 if app.wait_healthy():
                     app_status = f"running; health check {cfg.healthcheck} OK. Test command: `{cfg.test_cmd or 'n/a'}`"
                 else:
-                    app_status = "FAILED to become healthy. Report this as a blocker finding or unverified criteria."
+                    log_tail = sandbox.tail(app.stop(), 1500)
+                    app = None
+                    app_status = (
+                        "FAILED to become healthy. Report this as a blocker finding or unverified criteria.\n"
+                        f"App output:\n{log_tail}"
+                    )
             rec(f"app: {app_status}")
 
         user = build_user_prompt(

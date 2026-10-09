@@ -20,6 +20,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- Agent loop accepts tool calls that local models write as JSON text (`{"name": ..., "arguments": ...}`, fenced or in
+  `<tool_call>`), and nudges up to 3 times before failing; the failure now quotes the model's last reply.
+- Run log shows the output of failing gates and the app's output when it does not become healthy.
+- antrotrip-server: Valkey image pinned to `valkey/valkey:8`, pulled with retries.
+
 - Convention files are read up to 20,000 characters each (was 6,000), so long `CLAUDE.md` files are not cut off.
 - Web app uses pnpm (pinned via `packageManager`) instead of npm.
 - Fixed the Python package name (`mogo-server`); a scoped npm-style name is invalid for pip.
