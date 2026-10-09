@@ -30,29 +30,29 @@ jobs:
       # Names only, never values: says which settings reached the job and which sit in the wrong tab.
       - name: Check configuration
         env:
-          S_AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN != '' }}
+          S_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN != '' }}
           S_DATABASE_URL: ${{ secrets.DATABASE_URL != '' }}
           S_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
           S_LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL != '' }}
-          V_AGENT_GITHUB_TOKEN: ${{ vars.AGENT_GITHUB_TOKEN != '' }}
+          V_GITHUB_TOKEN: ${{ vars.GITHUB_TOKEN != '' }}
           V_DATABASE_URL: ${{ vars.DATABASE_URL != '' }}
           V_DEEPSEEK_API_KEY: ${{ vars.DEEPSEEK_API_KEY != '' }}
           V_LOCAL_LLM_BASE_URL: ${{ vars.LOCAL_LLM_BASE_URL != '' }}
         run: |
           missing=0
-          for n in AGENT_GITHUB_TOKEN DATABASE_URL DEEPSEEK_API_KEY LOCAL_LLM_BASE_URL; do
+          for n in GITHUB_TOKEN DATABASE_URL DEEPSEEK_API_KEY LOCAL_LLM_BASE_URL; do
             s="S_$n"; v="V_$n"
             if [ "${!s}" = "true" ]; then echo "ok       secret $n"
             elif [ "${!v}" = "true" ]; then echo "::error::$n is under the Variables tab; move it to the Secrets tab"; missing=1
             else echo "missing  secret $n"; fi
           done
-          [ "$S_DATABASE_URL" = "true" ] && [ "$S_AGENT_GITHUB_TOKEN" = "true" ] || { echo "::error::DATABASE_URL and AGENT_GITHUB_TOKEN must be repository secrets (Settings > Secrets and variables > Actions > Secrets)"; missing=1; }
+          [ "$S_DATABASE_URL" = "true" ] && [ "$S_GITHUB_TOKEN" = "true" ] || { echo "::error::DATABASE_URL and GITHUB_TOKEN must be repository secrets (Settings > Secrets and variables > Actions > Secrets)"; missing=1; }
           exit $missing
       - name: Run agent
         working-directory: backend
         env:
           RUN_ID: ${{ inputs.run_id }}
-          GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
