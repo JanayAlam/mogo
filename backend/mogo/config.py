@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)  # errors never echo secrets
 
     github_token: str = ""
 
@@ -29,6 +29,17 @@ class Settings(BaseSettings):
 
     max_agent_steps: int = 25
     run_timeout_s: int = 1200
+
+    @field_validator("database_url")
+    @classmethod
+    def _usable_database_url(cls, v: str) -> str:
+        # Never echo the value: it holds the password.
+        v = v.strip().strip("'\"").strip()
+        if not v:
+            raise ValueError("DATABASE_URL is empty (on Actions: the DATABASE_URL secret is missing in the runner repo)")
+        if not v.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
+            raise ValueError("DATABASE_URL must start with postgresql:// (copy the Supabase pooler connection string)")
+        return v
 
     @property
     def db_url(self) -> str:
