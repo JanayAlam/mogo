@@ -46,8 +46,9 @@ describe('repo form', () => {
     const f = configToForm({})
     expect(formError(f)).toBeNull()
     expect(formError({ ...f, runApp: true })).toContain('start script')
-    expect(formError({ ...f, runApp: true, startScript: 'pnpm dev', appUrl: 'localhost' })).toContain('app URL')
+    expect(formError({ ...f, runApp: true, startScript: 'pnpm dev', appUrl: 'localhost' })).toContain('ready URL')
     expect(formError({ ...f, runApp: true, startScript: 'pnpm dev', appUrl: 'http://localhost:3000' })).toBeNull()
+    expect(formError({ ...f, runApp: true, startScript: 'pnpm dev', appUrl: '' })).toBeNull() // optional
   })
   it('suggestions fill only empty parts', () => {
     const s = { install: 'npm ci', checks: ['npm run lint'], test_cmd: 'npm test', start: 'npm run dev', app_url: 'http://localhost:3000', env_names: [] }

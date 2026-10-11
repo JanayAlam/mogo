@@ -45,13 +45,13 @@ other repos of the feature (their roles and PRs, so contract mismatches are visi
 
 When a repo is added, the runner reads its source of truth branch (`package.json`, the lockfile, `tsconfig.json`,
 `pyproject.toml`, `.env.example`) and the repo page offers what it found under **Detected on main**: checks (lint,
-type check, format check), test command, start script and app URL. **Use these** fills the empty fields; nothing is
+type check, format check), test command, start script and ready URL. **Use these** fills the empty fields; nothing is
 saved until you click Save. **Re-learn now** reads the branch again.
 
 | Section | What it is | Stored as (`repos.config`) |
 | --- | --- | --- |
 | **Checks** | commands run on every review after installing; any failure requests changes | `gates` |
-| **Run the app** | off = review only. On: a start script (earlier lines run first, the last one starts the app) and the URL the run waits for before the agent tests | `prepare` + `start`, `healthcheck` |
+| **Run the app** | off = review only. On: a start script (earlier lines run first, the last one starts the app) and an optional ready URL: the agent starts once it answers (any status below 500, so a frontend's home page works; empty = `http://localhost:<PORT>`) | `prepare` + `start`, `healthcheck` |
 | **Agent notes** | convention files, extra rules, testing notes (accounts, how to log in) | `conventions`, `rules`, `notes` |
 | **Advanced** | install override, test command for the agent, stop command, fork PRs | `setup`, `test_cmd`, `services_down`, `allow_forks` |
 

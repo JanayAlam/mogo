@@ -189,9 +189,11 @@ def execute_run(
                     app_status = f"NOT started: prepare step `{cmd}` failed:\n{sandbox.tail(out, 1200)}"
                     break
             if prepared:
-                app = sandbox.AppProcess(cfg.start, root, repo_env, cfg.healthcheck or "http://localhost:3000")
+                # Any answer below 500 means "up": a health route for an API, the home page for a frontend.
+                ready_url = cfg.healthcheck or f"http://localhost:{repo_env.get('PORT') or 3000}"
+                app = sandbox.AppProcess(cfg.start, root, repo_env, ready_url)
                 if app.wait_healthy():
-                    app_status = f"running; health check {cfg.healthcheck} OK. Test command: `{cfg.test_cmd or 'n/a'}`"
+                    app_status = f"running at {ready_url} (it answered). Test command: `{cfg.test_cmd or 'n/a'}`"
                 else:
                     log_tail = sandbox.tail(app.stop(), 1500)
                     app = None

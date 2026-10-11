@@ -141,7 +141,7 @@ export function ProjectView() {
                       title={r.full_name}>
                       {r.full_name}
                     </p>
-                    <p className="mt-1 flex items-center gap-2 truncate text-xs text-muted-foreground">
+                    <div className="mt-1 flex items-center gap-2 truncate text-xs text-muted-foreground">
                       <Chip>{r.role || "no role"}</Chip>
                       {r.default_branch} ·{" "}
                       {r.profile?.main_sha
@@ -152,7 +152,7 @@ export function ProjectView() {
                           · update failed
                         </span>
                       )}
-                    </p>
+                    </div>
                   </Link>
                 </li>
               ))}

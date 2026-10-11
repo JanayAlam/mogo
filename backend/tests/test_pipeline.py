@@ -166,7 +166,7 @@ def test_prepare_runs_before_start_with_seeds_dir_and_notes_reach_the_agent(sett
     rid = _run_feature(settings, cfg, sf, llm, env={"acme/api": {"APP_MODE": "test"}})
     assert (tmp_path / "prepared").read_text().strip() == "test"
     assert "ACCOUNT-NOTE: log in as traveler@seed.test" in llm.first_user_prompt
-    assert "health check http://localhost:8766 OK" in llm.first_user_prompt
+    assert "running at http://localhost:8766 (it answered)" in llm.first_user_prompt
     with sf() as s:
         assert s.get(Run, rid).status == "succeeded"
 
@@ -177,3 +177,11 @@ def test_failed_prepare_skips_start_and_tells_the_agent(settings, sf, tmp_path):
     _run_feature(settings, cfg, sf, llm)
     assert not (tmp_path / "not-reached").exists()
     assert "NOT started: prepare step" in llm.first_user_prompt and "seeding-broke" in llm.first_user_prompt
+
+
+def test_ready_url_defaults_to_the_repo_port(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    cfg = {"acme/api": RepoConfig(name="acme/api", start="python3 -m http.server 8767")}  # no ready URL set
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    _run_feature(settings, cfg, sf, llm, env={"acme/api": {"PORT": "8767"}})
+    assert "running at http://localhost:8767 (it answered)" in llm.first_user_prompt

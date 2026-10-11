@@ -270,15 +270,15 @@ function RepoForm({
                 />
               </Field>
               <Field
-                label="App URL"
+                label="Ready URL (optional)"
                 htmlFor="app-url"
-                hint="The run waits until this answers, then the agent starts testing.">
+                hint="The agent starts once this answers. Any response counts, even a 404: use a health route for an API, the home page for a frontend. Empty: http://localhost:<PORT>, with this repo's PORT variable, else 3000.">
                 <Input
                   id="app-url"
                   className={mono}
                   value={form.appUrl}
                   onChange={(e) => set("appUrl", e.target.value)}
-                  placeholder="http://localhost:3000/health"
+                  placeholder={suggestions?.app_url || "http://localhost:3000"}
                 />
               </Field>
             </CardContent>
@@ -456,7 +456,7 @@ function Detected({
         {row("Checks", suggestions.checks.join("\n"))}
         {row("Tests", suggestions.test_cmd)}
         {row("Start", suggestions.start)}
-        {row("App URL", suggestions.app_url)}
+        {row("Ready URL", suggestions.app_url)}
         {suggestions.env_names.length > 0 && (
           <p className="pt-1 text-xs text-muted-foreground">
             .env.example lists {suggestions.env_names.length} variables: import

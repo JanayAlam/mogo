@@ -41,7 +41,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   import marks names that look like credentials as sensitive.
 - Repo settings detected from the source branch (package.json, lockfile, tsconfig.json, pyproject.toml,
   .env.example) when a repo is added or re-learned, offered as "Detected on main" with "Use these".
-- Simpler repo form: Checks, Run the app (start script + app URL), Agent notes, and a collapsed Advanced section.
+- Simpler repo form: Checks, Run the app (start script + ready URL), Agent notes, and a collapsed Advanced section.
+- "App URL" is now "Ready URL" and optional: any answer counts (a frontend's home page works); empty waits for
+  `http://localhost:<PORT>` using the repo's PORT variable, else 3000.
+- Badges render as `<span>`: a `<div>` inside text caused a hydration error on the project page.
   Without an install override the runner installs from the lockfile.
 - `Button` takes `loading`: a spinner replaces its icon and it is disabled. Used for every action button; only the
   button that started an action spins.

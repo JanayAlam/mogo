@@ -68,7 +68,8 @@ export function formToConfig(f: ConfigForm): Partial<RepoConfig> {
 export function formError(f: ConfigForm): string | null {
   if (!f.runApp) return null
   if (!fromLines(f.startScript).length) return 'Run the app is on: add the start script, or switch it off.'
-  if (!/^https?:\/\/\S+$/.test(f.appUrl.trim())) return 'Run the app is on: the app URL must be http(s)://…'
+  const url = f.appUrl.trim()
+  if (url && !/^https?:\/\/\S+$/.test(url)) return 'The ready URL must start with http:// or https://'
   return null
 }
 
