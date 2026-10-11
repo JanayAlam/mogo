@@ -1,9 +1,17 @@
 "use client";
 
-import { ChevronDown, FileUp, Lock, Pencil, Plus, RefreshCw, Sparkles } from "lucide-react";
+import {
+  ChevronDown,
+  FileUp,
+  Lock,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "nextjs-toploader/app";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { RoleInput } from "@/components/project-view";
@@ -55,6 +63,7 @@ import {
 import { cn } from "@/lib/utils";
 
 const mono = "font-mono text-xs md:text-xs";
+const noSubscribe = () => () => {};
 
 export function RepoSettings() {
   const { id, repoId } = useParams<{ id: string; repoId: string }>();
@@ -115,9 +124,16 @@ function RepoForm({
   onSaved: () => void;
 }) {
   const router = useRouter();
-  const [role, setRole] = useState(repo.role);
-  const [branch, setBranch] = useState(repo.default_branch);
-  const [form, setForm] = useState<ConfigForm>(() => configToForm(repo.config));
+  const formRef = useRef<HTMLFormElement>(null);
+  // Last saved state: "Discard" goes back to it, and changes are measured against it.
+  const [base, setBase] = useState(() => ({
+    role: repo.role,
+    branch: repo.default_branch,
+    form: configToForm(repo.config),
+  }));
+  const [role, setRole] = useState(base.role);
+  const [branch, setBranch] = useState(base.branch);
+  const [form, setForm] = useState<ConfigForm>(base.form);
   const [advancedOpen, setAdvancedOpen] = useState(
     () => !!(form.install || form.testCmd || form.stopCmd || form.allowForks),
   );
@@ -128,21 +144,60 @@ function RepoForm({
   const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
-  const saveButton = <Button loading={save.busy}>Save</Button>;
+  // Compared as saved, so whitespace-only edits are not changes. Leftover env_from is removed by saving.
+  const payload = (r: string, b: string, f: ConfigForm) => ({
+    role: r.trim(),
+    default_branch: b.trim() || "main",
+    config: formToConfig(f),
+  });
+  const dirty =
+    legacy.length > 0 ||
+    JSON.stringify(payload(role, branch, form)) !==
+      JSON.stringify(payload(base.role, base.branch, base.form));
+
+  // Shortcut label: "Ctrl S" on the server, the platform's own in the browser (no hydration mismatch).
+  const shortcut = useSyncExternalStore(
+    noSubscribe,
+    () => (/Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘S" : "Ctrl S"),
+    () => "Ctrl S",
+  );
+
+  const discard = () => {
+    setRole(base.role);
+    setBranch(base.branch);
+    setForm(base.form);
+    save.setError("");
+  };
+
+  // Ctrl/Cmd+S saves; leaving the page with unsaved changes asks first.
+  useEffect(() => {
+    if (!dirty) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        formRef.current?.requestSubmit();
+      }
+    };
+    const onLeave = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("beforeunload", onLeave);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("beforeunload", onLeave);
+    };
+  }, [dirty]);
 
   return (
     <form
+      ref={formRef}
       className="mt-3"
       onSubmit={(e) => {
         e.preventDefault();
         const problem = formError(form);
         if (problem) return save.setError(problem);
         save.run(async () => {
-          await api.updateRepo(repo.id, {
-            role: role.trim(),
-            default_branch: branch.trim() || "main",
-            config: formToConfig(form),
-          });
+          await api.updateRepo(repo.id, payload(role, branch, form));
+          setBase({ role, branch, form });
           toast.success("Repo settings saved");
           onSaved();
         });
@@ -171,10 +226,9 @@ function RepoForm({
             }>
             Remove
           </ConfirmButton>
-          {saveButton}
         </div>
       </div>
-      <ErrorText error={save.error || del.error} />
+      <ErrorText error={del.error} />
       {legacy.length > 0 && (
         <p className="mb-6 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           This repo still lists GitHub Actions secret names (env_from), which
@@ -223,8 +277,8 @@ function RepoForm({
           <CardHeader>
             <CardTitle>Checks</CardTitle>
             <CardDescription>
-              Run on every review after installing dependencies, one command
-              per line. Any failure requests changes.
+              Run on every review after installing dependencies, one command per
+              line. Any failure requests changes.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -266,7 +320,9 @@ function RepoForm({
                   className={mono}
                   value={form.startScript}
                   onChange={(e) => set("startScript", e.target.value)}
-                  placeholder={"docker compose up -d db\npnpm prisma migrate deploy\npnpm dev"}
+                  placeholder={
+                    "docker compose up -d db\npnpm prisma migrate deploy\npnpm dev"
+                  }
                 />
               </Field>
               <Field
@@ -330,9 +386,15 @@ function RepoForm({
 
         <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
           <CollapsibleTrigger asChild>
-            <Button type="button" variant="ghost" className="px-0 hover:bg-transparent">
+            <Button
+              type="button"
+              variant="ghost"
+              className="px-0 hover:bg-transparent">
               <ChevronDown
-                className={cn("transition-transform", !advancedOpen && "-rotate-90")}
+                className={cn(
+                  "transition-transform",
+                  !advancedOpen && "-rotate-90",
+                )}
               />
               Advanced
             </Button>
@@ -350,7 +412,9 @@ function RepoForm({
                     className={mono}
                     value={form.install}
                     onChange={(e) => set("install", e.target.value)}
-                    placeholder={suggestions?.install || "pnpm install --frozen-lockfile"}
+                    placeholder={
+                      suggestions?.install || "pnpm install --frozen-lockfile"
+                    }
                   />
                 </Field>
                 <Field
@@ -393,9 +457,51 @@ function RepoForm({
             </Card>
           </CollapsibleContent>
         </Collapsible>
-
-        <div className="flex justify-end">{saveButton}</div>
       </div>
+
+      {dirty && (
+        <>
+          {/* room so the bar never covers the end of the page */}
+          <div className="h-20" aria-hidden />
+          <div
+            role="region"
+            aria-label="Unsaved changes"
+            className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur animate-in fade-in slide-in-from-bottom-4">
+            <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-3">
+              <div className="min-w-0 text-sm">
+                <p className="font-medium">
+                  {legacy.length > 0
+                    ? "Save to remove the old env_from list"
+                    : "Unsaved changes"}
+                </p>
+                {save.error ? (
+                  <p className="text-destructive">{save.error}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Repo settings above. Environment variables save on their
+                    own.
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={discard}
+                  disabled={save.busy}>
+                  Discard
+                </Button>
+                <Button loading={save.busy}>
+                  Save
+                  <kbd className="ml-1 hidden rounded border border-primary-foreground/30 px-1 font-mono text-[10px] sm:inline">
+                    {shortcut}
+                  </kbd>
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </form>
   );
 }
@@ -419,20 +525,23 @@ function Detected({
       <Card className="border-primary/30">
         <CardContent className="flex items-center gap-3 p-4 text-sm text-muted-foreground">
           <RefreshCw className="h-4 w-4 animate-spin text-primary" />
-          Reading {branch}: settings found in package.json and the lockfile
-          will be suggested here.
+          Reading {branch}: settings found in package.json and the lockfile will
+          be suggested here.
         </CardContent>
       </Card>
     );
   }
   const useful =
-    suggestions && (suggestions.checks.length || suggestions.start || suggestions.test_cmd);
+    suggestions &&
+    (suggestions.checks.length || suggestions.start || suggestions.test_cmd);
   if (!useful || form.checks.trim() || form.startScript.trim()) return null;
   const row = (label: string, value: string) =>
     value && (
       <div className="flex gap-3">
         <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-        <code className="font-mono text-xs leading-5 whitespace-pre-wrap">{value}</code>
+        <code className="font-mono text-xs leading-5 whitespace-pre-wrap">
+          {value}
+        </code>
       </div>
     );
   return (
@@ -452,7 +561,10 @@ function Detected({
         </Button>
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
-        {row("Install", suggestions.install && `${suggestions.install}  (automatic)`)}
+        {row(
+          "Install",
+          suggestions.install && `${suggestions.install}  (automatic)`,
+        )}
         {row("Checks", suggestions.checks.join("\n"))}
         {row("Tests", suggestions.test_cmd)}
         {row("Start", suggestions.start)}
@@ -521,7 +633,7 @@ function EnvPanel({ repoId }: { repoId: string }) {
               <span>Name</span>
               <span>Value</span>
               <span>Sensitive</span>
-              <span className="w-[10rem]" />
+              <span className="w-40" />
             </div>
             {list.data.vars.map((v) => (
               <div
@@ -533,7 +645,9 @@ function EnvPanel({ repoId }: { repoId: string }) {
                 <span
                   className="truncate font-mono text-xs text-muted-foreground"
                   title={v.value ?? undefined}>
-                  {v.sensitive ? `•••••••• · set ${timeAgo(v.updated_at)}` : v.value}
+                  {v.sensitive
+                    ? `•••••••• · set ${timeAgo(v.updated_at)}`
+                    : v.value}
                 </span>
                 <Switch
                   aria-label={`${v.name} is sensitive`}
@@ -551,7 +665,7 @@ function EnvPanel({ repoId }: { repoId: string }) {
                     });
                   }}
                 />
-                <span className="flex w-[10rem] justify-end gap-2">
+                <span className="flex w-40 justify-end gap-2">
                   <Button
                     type="button"
                     size="sm"
@@ -626,7 +740,9 @@ function EnvVarDialog({
   // The list sends no value for sensitive variables: the stored one is secret.
   const storedSecret = !!current && current.value === null;
   const [name, setName] = useState(current?.name ?? "");
-  const [value, setValue] = useState(storedSecret ? "" : (current?.value ?? ""));
+  const [value, setValue] = useState(
+    storedSecret ? "" : (current?.value ?? ""),
+  );
   const [sensitive, setSensitive] = useState(current?.sensitive ?? false);
   const [touched, setTouched] = useState(!isNew); // pick "sensitive" from the name until the user decides
   const action = useAction();
@@ -681,7 +797,11 @@ function EnvVarDialog({
         <Field
           label="Value"
           htmlFor="env-value"
-          hint={storedSecret && sensitive ? "Leave empty to keep the current value." : undefined}>
+          hint={
+            storedSecret && sensitive
+              ? "Leave empty to keep the current value."
+              : undefined
+          }>
           <Input
             id="env-value"
             className="font-mono"

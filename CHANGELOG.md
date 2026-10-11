@@ -44,6 +44,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Simpler repo form: Checks, Run the app (start script + ready URL), Agent notes, and a collapsed Advanced section.
 - "App URL" is now "Ready URL" and optional: any answer counts (a frontend's home page works); empty waits for
   `http://localhost:<PORT>` using the repo's PORT variable, else 3000.
+- Repo page: one save bar at the bottom instead of two Save buttons, shown only with unsaved changes (Discard, Save,
+  Ctrl/⌘+S; leaving the page asks first). Validation errors show in the bar.
 - Badges render as `<span>`: a `<div>` inside text caused a hydration error on the project page.
   Without an install override the runner installs from the lockfile.
 - `Button` takes `loading`: a spinner replaces its icon and it is disabled. Used for every action button; only the
