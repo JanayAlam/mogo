@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from mogo.config import RepoConfig, Settings
-from mogo.models import Project, Repo, make_session_factory
+from mogo.models import Project, Repo, RepoEnvVar, make_session_factory
 
 
 FAKE_DB_URL = "postgresql://user:pw@localhost:5432/db"
@@ -25,9 +25,10 @@ def sf(tmp_path):
     return make_session_factory(f"sqlite:///{tmp_path / 'test.db'}")
 
 
-def seed_repos(sf, cfgs, project="Acme", roles=None):
-    """Store repo settings the way the web app does. Returns {owner/repo: repo id}."""
-    roles = roles or {}
+def seed_repos(sf, cfgs, project="Acme", roles=None, env=None):
+    """Store repo settings the way the web app does. `env`: {owner/repo: {NAME: plain value}}.
+    Returns {owner/repo: repo id}."""
+    roles, env = roles or {}, env or {}
     with sf() as s:
         p = Project(name=project, description="Acme shop")
         s.add(p)
@@ -35,6 +36,10 @@ def seed_repos(sf, cfgs, project="Acme", roles=None):
         rows = [Repo(project_id=p.id, full_name=c.name, role=roles.get(c.name, ""), config=c.model_dump(exclude={"name"}))
                 for c in cfgs.values()]
         s.add_all(rows)
+        s.flush()
+        for r in rows:
+            for k, v in env.get(r.full_name, {}).items():
+                s.add(RepoEnvVar(repo_id=r.id, name=k, sensitive=False, value=v))
         s.commit()
         return {r.full_name: r.id for r in rows}
 

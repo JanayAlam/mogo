@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
+import { JetBrains_Mono, Poppins } from "next/font/google";
+import NextTopLoader from "nextjs-toploader";
+
+import { Toaster } from "@/components/ui/sonner";
+
 import "./globals.css";
 
-const plexSans = IBM_Plex_Sans({
-  variable: "--font-plex-sans",
+const poppins = Poppins({
+  variable: "--font-poppins",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  weight: ["400", "500", "600", "700"],
 });
 
 const jetbrainsMono = JetBrains_Mono({
@@ -22,8 +26,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${plexSans.variable} ${jetbrainsMono.variable} h-full antialiased`}>
-      <body className="min-h-full">{children}</body>
+      className={`${poppins.variable} ${jetbrainsMono.variable} h-full antialiased`}>
+      <body className="min-h-full">
+        <NextTopLoader color="var(--primary)" height={2} showSpinner={false} shadow="0 0 8px var(--primary)" />
+        {children}
+        <Toaster position="bottom-right" />
+      </body>
     </html>
   );
 }

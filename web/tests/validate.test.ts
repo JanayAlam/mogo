@@ -24,13 +24,12 @@ describe('validateRepoInput', () => {
   it.each([
     [{ full_name: 'not a repo' }, 'owner/repo'],
     [{ full_name: 'a/b', config: { gates: 'pnpm lint' } }, 'config.gates'],
-    [{ full_name: 'a/b', config: { env: { 'BAD NAME': 'x' } } }, 'config.env'],
   ])('rejects %j', (body, msg) => {
     expect(validateRepoInput(body)).toContain(msg)
   })
-  it('drops the removed env_from key', () => {
-    expect(validateRepoInput({ full_name: 'a/b', config: { env: { A: '1' }, env_from: { X: 'Y' } } })).toMatchObject({
-      config: { env: { A: '1' } },
+  it('drops keys that moved out of the settings (env, env_from)', () => {
+    expect(validateRepoInput({ full_name: 'a/b', config: { gates: ['x'], env: { A: '1' }, env_from: { X: 'Y' } } })).toEqual({
+      full_name: 'a/b', role: '', default_branch: 'main', config: { gates: ['x'] },
     })
     expect(JSON.stringify(validateRepoInput({ full_name: 'a/b', config: { env_from: ['X'] } }))).not.toContain('env_from')
   })

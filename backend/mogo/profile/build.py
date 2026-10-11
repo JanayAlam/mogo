@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from mogo.profile.detect import ENV_EXAMPLES, detect
 from mogo.profile.naming import is_source, is_test
 from mogo.profile.structure import analyze, dominant, subtree
 from mogo.profile.types import extract_types
@@ -86,6 +87,7 @@ class Profile:
     structure: dict = field(default_factory=dict)
     type_index: list[dict] = field(default_factory=list)
     summary: str = ""
+    suggestions: dict = field(default_factory=dict)  # run settings read from the branch (mogo/profile/detect.py)
 
 
 def build_profile(tree: Tree, sha: str, branch: str) -> Profile:
@@ -94,7 +96,11 @@ def build_profile(tree: Tree, sha: str, branch: str) -> Profile:
     typed = [p for p in paths if is_source(p) and not is_test(p) and p.endswith((".ts", ".tsx", ".py", ".js", ".mts"))]
     texts = tree.read_many(typed[:MAX_TYPE_FILES])
     types = [t.as_dict() for p, text in texts.items() for t in extract_types(p, text)][:MAX_TYPES]
-    profile = Profile(main_sha=sha, branch=branch, structure=structure, type_index=types)
+    root_names = {p for p in paths if "/" not in p}
+    wanted = [n for n in ("package.json", "pyproject.toml", *ENV_EXAMPLES) if n in root_names]
+    root_files = tree.read_many(wanted)
+    suggestions = detect(root_names, root_files.get)
+    profile = Profile(main_sha=sha, branch=branch, structure=structure, type_index=types, suggestions=suggestions)
     profile.summary = render_summary(profile)
     return profile
 

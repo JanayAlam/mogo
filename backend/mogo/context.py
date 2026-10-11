@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mogo.config import RepoConfig
-from mogo.models import Feature, FeatureRepo, Project, Repo, RepoSecret, Run
+from mogo.models import Feature, FeatureRepo, Project, Repo, RepoEnvVar, Run
 
 
 class ContextError(ValueError):
@@ -37,7 +37,8 @@ class RunContext:
     feature: str = ""  # what to verify; empty means review only
     requirements: str = ""  # this repo's part of the feature
     siblings: list[Sibling] = field(default_factory=list)
-    secrets: dict[str, str] = field(default_factory=dict)  # name -> ciphertext; decrypted by the pipeline
+    env: dict[str, str] = field(default_factory=dict)  # non-sensitive variables, plain
+    secrets: dict[str, str] = field(default_factory=dict)  # sensitive: name -> ciphertext; decrypted by the pipeline
     legacy_env_from: list[str] = field(default_factory=list)  # names a repo still lists under the removed env_from
 
 
@@ -66,7 +67,7 @@ def load_context(sf: sessionmaker, run_id: str) -> RunContext:
             if repo is None:
                 raise ContextError(f"{run.repo} is not configured in any project")
             ctx = _base(repo, s.get(Project, repo.project_id), feature=run.feature)
-            ctx.secrets = _secrets(s, repo.id)
+            ctx.env, ctx.secrets = _env(s, repo.id)
             return ctx
 
         feature: Feature = fr.feature
@@ -77,12 +78,19 @@ def load_context(sf: sessionmaker, run_id: str) -> RunContext:
         ctx.siblings = [
             Sibling(o.repo.full_name, o.repo.role, o.pr_url, o.requirements) for o in feature.repos if o.id != fr.id
         ]
-        ctx.secrets = _secrets(s, fr.repo_id)
+        ctx.env, ctx.secrets = _env(s, fr.repo_id)
         return ctx
 
 
-def _secrets(s: Session, repo_id: str) -> dict[str, str]:
-    return {r.name: r.value_enc for r in s.scalars(select(RepoSecret).where(RepoSecret.repo_id == repo_id))}
+def _env(s: Session, repo_id: str) -> tuple[dict[str, str], dict[str, str]]:
+    """(plain variables, sensitive name -> ciphertext)."""
+    plain, secret = {}, {}
+    for r in s.scalars(select(RepoEnvVar).where(RepoEnvVar.repo_id == repo_id)):
+        if r.sensitive:
+            secret[r.name] = r.value_enc or ""
+        else:
+            plain[r.name] = r.value or ""
+    return plain, secret
 
 
 def legacy_env_from(config: dict | None) -> list[str]:

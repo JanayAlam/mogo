@@ -1,7 +1,12 @@
 import { NextRequest } from 'next/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+// connection() needs a real request scope; the routes only use it to opt out of build-time rendering.
+vi.mock('next/server', async (orig) => ({ ...(await orig<typeof import('next/server')>()), connection: async () => {} }))
+
 import { POST as login } from '@/app/api/login/route'
+import { POST as logout } from '@/app/api/logout/route'
+import { GET as session } from '@/app/api/session/route'
 import { COOKIE, isAuthorized, sessionToken } from '@/lib/auth'
 import { proxy } from '@/proxy'
 
@@ -67,5 +72,22 @@ describe('proxy', () => {
     expect((await proxy(new NextRequest('http://x/api/login'))).headers.get('x-middleware-next')).toBe('1')
     const authed = new NextRequest('http://x/api/runs', { headers: { cookie: `${COOKIE}=${await sessionToken('hunter2')}` } })
     expect((await proxy(authed)).headers.get('x-middleware-next')).toBe('1')
+  })
+})
+
+describe('session and logout', () => {
+  it('tells the UI whether there is a login', async () => {
+    vi.stubEnv('APP_PASSWORD', 'hunter2')
+    expect(await (await session()).json()).toEqual({ login_required: true })
+    vi.stubEnv('APP_PASSWORD', '')
+    vi.stubEnv('NODE_ENV', 'development')
+    expect(await (await session()).json()).toEqual({ login_required: false })
+  })
+  it('logout clears the cookie and is reachable without a session', async () => {
+    const cookie = (await logout()).headers.get('set-cookie')!
+    expect(cookie).toContain(`${COOKIE}=;`)
+    expect(cookie.toLowerCase()).toContain('max-age=0')
+    vi.stubEnv('APP_PASSWORD', 'hunter2')
+    expect((await proxy(new NextRequest('http://x/api/logout', { method: 'POST' }))).status).toBe(200)
   })
 })

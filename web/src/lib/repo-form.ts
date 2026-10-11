@@ -1,4 +1,4 @@
-import type { RepoConfig } from '@/lib/projects'
+import type { RepoConfig, Suggestions } from '@/lib/projects'
 
 /** Repo roles the UI suggests. Any text is allowed: the LLM reads it as written. */
 export const ROLE_SUGGESTIONS = ['backend', 'frontend', 'admin-frontend', 'mobile', 'shared-lib', 'infra', 'worker']
@@ -10,45 +10,77 @@ export const fromLines = (s: string) =>
     .map((l) => l.trim())
     .filter(Boolean)
 
-/** `NAME=value` per line. */
-export const toPairs = (v: Record<string, string> | undefined) =>
-  Object.entries(v ?? {})
-    .map(([k, val]) => `${k}=${val}`)
-    .join('\n')
-
-export function fromPairs(s: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const line of fromLines(s)) {
-    const i = line.indexOf('=')
-    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim()
-  }
-  return out
+/**
+ * The repo form as the user sees it. It maps onto the runner's settings (RepoConfig) without changing them:
+ * checks = gates; the start script's last line is `start`, earlier lines run first as `prepare`; install, test and
+ * stop commands are advanced overrides.
+ */
+export interface ConfigForm {
+  checks: string
+  runApp: boolean
+  startScript: string
+  appUrl: string
+  conventions: string
+  rules: string
+  notes: string
+  install: string // empty: the runner installs from the lockfile
+  testCmd: string
+  stopCmd: string
+  allowForks: boolean
 }
 
-/** The editable text form of a repo's settings, one string per field. */
-export type ConfigForm = Record<
-  'setup' | 'gates' | 'prepare' | 'conventions' | 'rules' | 'env' | 'test_cmd' | 'services_cmd' |
-  'services_down' | 'start' | 'healthcheck' | 'notes',
-  string
-> & { allow_forks: boolean }
-
 export function configToForm(c: Partial<RepoConfig>): ConfigForm {
+  const startLines = [c.services_cmd ?? '', ...(c.prepare ?? []), c.start ?? ''].map((l) => l.trim()).filter(Boolean)
   return {
-    setup: toLines(c.setup), gates: toLines(c.gates), prepare: toLines(c.prepare),
-    conventions: toLines(c.conventions), rules: toLines(c.rules),
-    env: toPairs(c.env),
-    test_cmd: c.test_cmd ?? '', services_cmd: c.services_cmd ?? '', services_down: c.services_down ?? '',
-    start: c.start ?? '', healthcheck: c.healthcheck ?? '', notes: c.notes ?? '', allow_forks: c.allow_forks ?? false,
+    checks: toLines(c.gates),
+    runApp: !!c.start,
+    startScript: c.start ? startLines.join('\n') : '',
+    appUrl: c.healthcheck ?? '',
+    conventions: toLines(c.conventions),
+    rules: toLines(c.rules),
+    notes: c.notes ?? '',
+    install: toLines(c.setup),
+    testCmd: c.test_cmd ?? '',
+    stopCmd: c.services_down ?? '',
+    allowForks: c.allow_forks ?? false,
   }
 }
 
 export function formToConfig(f: ConfigForm): Partial<RepoConfig> {
+  const start = f.runApp ? fromLines(f.startScript) : []
   return {
-    setup: fromLines(f.setup), gates: fromLines(f.gates), prepare: fromLines(f.prepare),
-    conventions: fromLines(f.conventions), rules: fromLines(f.rules),
-    env: fromPairs(f.env),
-    test_cmd: f.test_cmd.trim(), services_cmd: f.services_cmd.trim(), services_down: f.services_down.trim(),
-    start: f.start.trim(), healthcheck: f.healthcheck.trim(), notes: f.notes, allow_forks: f.allow_forks,
+    gates: fromLines(f.checks),
+    setup: fromLines(f.install),
+    test_cmd: f.testCmd.trim(),
+    services_cmd: '',
+    prepare: start.slice(0, -1),
+    start: start.at(-1) ?? '',
+    healthcheck: f.runApp ? f.appUrl.trim() : '',
+    services_down: f.stopCmd.trim(),
+    conventions: fromLines(f.conventions),
+    rules: fromLines(f.rules),
+    notes: f.notes,
+    allow_forks: f.allowForks,
+  }
+}
+
+/** What is wrong with the form before saving, or null. */
+export function formError(f: ConfigForm): string | null {
+  if (!f.runApp) return null
+  if (!fromLines(f.startScript).length) return 'Run the app is on: add the start script, or switch it off.'
+  if (!/^https?:\/\/\S+$/.test(f.appUrl.trim())) return 'Run the app is on: the app URL must be http(s)://…'
+  return null
+}
+
+/** Fills the form from settings detected on the branch; only empty parts are filled. */
+export function applySuggestions(f: ConfigForm, s: Suggestions): ConfigForm {
+  return {
+    ...f,
+    checks: f.checks.trim() ? f.checks : s.checks.join('\n'),
+    testCmd: f.testCmd.trim() ? f.testCmd : s.test_cmd,
+    runApp: f.runApp || !!s.start,
+    startScript: f.startScript.trim() ? f.startScript : s.start,
+    appUrl: f.appUrl.trim() ? f.appUrl : s.app_url,
   }
 }
 

@@ -82,3 +82,18 @@ function findClose(s: string, quote: string): number {
   }
   return -1
 }
+
+// A credential word as a whole part of the name (JWT_SECRET, SMTP_PASSWORD, MAPS_API_KEY) ...
+const SENSITIVE_WORD =
+  /(^|_)(SECRET|PASSWORD|PASSWD|PASS|PWD|TOKEN|PRIVATE|CREDENTIALS?|APIKEY|KEY|DSN|SALT|SIGNATURE|CERT)(_|$)/i
+// ... unless the name ends like a setting about it (JWT_ACCESS_TOKEN_VALIDITY_MINUTES, OTP_LENGTH, AWS_ACCESS_KEY_ID).
+const SETTING_SUFFIX =
+  /_(MINUTES|SECONDS|HOURS|DAYS|TTL|EXPIRY|EXPIRES_IN|LENGTH|SIZE|LIMIT|COUNT|URL|ENDPOINT|HOST|PORT|NAME|ID|MODE|ENABLED|FILE|PATH)$/i
+// Connection strings carry passwords; an access key id is half of a credential pair.
+const SENSITIVE_URL =
+  /^(DATABASE|DB|POSTGRES|PG|MYSQL|MONGO|MONGODB|REDIS|VALKEY|AMQP|RABBITMQ)(_[A-Z]+)*_URL$|(^|_)DATABASE_URL$|ACCESS_KEY_ID$/i
+
+/** Default for the "sensitive" switch: names that usually hold credentials. The user can change it. */
+export function looksSensitive(name: string): boolean {
+  return SENSITIVE_URL.test(name) || (SENSITIVE_WORD.test(name) && !SETTING_SUFFIX.test(name))
+}

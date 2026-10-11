@@ -1,7 +1,7 @@
 import type { FeatureInput, FeatureRow } from '@/lib/features'
 import type { ProjectRow, ProjectSummary, RepoInput, RepoRow } from '@/lib/projects'
 import type { LlmMode, RunRow } from '@/lib/runs'
-import type { SecretInfo } from '@/lib/secrets'
+import type { EnvVarInfo } from '@/lib/env'
 
 export type { FeatureRow as Feature, LlmMode, ProjectRow as Project, ProjectSummary, RepoRow as Repo, RunRow as Run }
 
@@ -56,6 +56,8 @@ const send = (method: string, body?: unknown): RequestInit => ({ method, body: J
 export const api = {
   login: (password: string) => call<{ ok: true }>('/login', send('POST', { password })),
   stats: () => call<Stats>('/stats'),
+  session: () => call<{ login_required: boolean }>('/session'),
+  logout: () => call<{ ok: true }>('/logout', send('POST')),
 
   projects: () => call<ProjectSummary[]>('/projects'),
   project: (id: string) => call<ProjectRow>(`/projects/${id}`),
@@ -66,20 +68,20 @@ export const api = {
 
   repo: (id: string) => call<RepoRow>(`/repos/${id}`),
   addRepo: (projectId: string, body: Partial<RepoInput>) =>
-    call<{ id: string }>(`/projects/${projectId}/repos`, send('POST', body)),
+    call<{ id: string; learning: boolean }>(`/projects/${projectId}/repos`, send('POST', body)),
   updateRepo: (id: string, body: Partial<RepoInput>) => call<{ ok: true }>(`/repos/${id}`, send('PATCH', body)),
   deleteRepo: (id: string) => call<{ ok: true }>(`/repos/${id}`, { method: 'DELETE' }),
   relearn: (id: string) => call<{ ok: true }>(`/repos/${id}/profile`, send('POST')),
-  secrets: (id: string) => call<{ secrets: SecretInfo[]; key_configured: boolean }>(`/repos/${id}/secrets`),
-  setSecret: (id: string, name: string, value: string) =>
-    call<{ ok: true }>(`/repos/${id}/secrets/${encodeURIComponent(name)}`, send('PUT', { value })),
-  importSecrets: (id: string, content: string) =>
-    call<{ added: string[]; replaced: string[]; skipped: { line: number; reason: string }[] }>(
-      `/repos/${id}/secrets`,
+  env: (id: string) => call<{ vars: EnvVarInfo[]; key_configured: boolean }>(`/repos/${id}/env`),
+  setEnvVar: (id: string, name: string, body: { value?: string; sensitive: boolean }) =>
+    call<{ ok: true }>(`/repos/${id}/env/${encodeURIComponent(name)}`, send('PUT', body)),
+  importEnv: (id: string, content: string) =>
+    call<{ added: string[]; replaced: string[]; sensitive: string[]; skipped: { line: number; reason: string }[] }>(
+      `/repos/${id}/env`,
       send('POST', { content }),
     ),
-  deleteSecret: (id: string, name: string) =>
-    call<{ ok: true }>(`/repos/${id}/secrets/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  deleteEnvVar: (id: string, name: string) =>
+    call<{ ok: true }>(`/repos/${id}/env/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
   features: (projectId: string) => call<FeatureRow[]>(`/projects/${projectId}/features`),
   feature: (id: string) => call<FeatureRow>(`/features/${id}`),

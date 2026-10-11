@@ -4,7 +4,7 @@ import base64
 import pytest
 
 from mogo.config import RepoConfig
-from mogo.models import RepoSecret, Run, RunEvent
+from mogo.models import RepoEnvVar, Run, RunEvent
 from mogo.runner.pipeline import execute_run
 from mogo.secrets import Redactor, SecretError, decrypt, decrypt_all, encrypt, load_key
 from conftest import FakeLLM, seed_repos, tool_call
@@ -44,12 +44,13 @@ def test_redactor():
 
 def test_secrets_reach_commands_override_env_and_are_masked(settings, sf, tmp_path, monkeypatch):
     ids = seed_repos(sf, {"acme/api": RepoConfig(
-        name="acme/api", env={"API_KEY": "plain", "MODE": "test"},
-        gates=[f'echo "$API_KEY $MODE" > {tmp_path}/env; echo "leak: $API_KEY"; exit 1'],
+        name="acme/api", gates=[f'echo "$API_KEY $MODE" > {tmp_path}/env; echo "leak: $API_KEY"; exit 1'],
     )})
     rid_repo = ids["acme/api"]
     with sf() as s:
-        s.add(RepoSecret(repo_id=rid_repo, name="API_KEY", value_enc=encrypt(load_key(KEY), rid_repo, "API_KEY", "dash-secret-value")))
+        s.add(RepoEnvVar(repo_id=rid_repo, name="MODE", sensitive=False, value="test"))
+        s.add(RepoEnvVar(repo_id=rid_repo, name="API_KEY", sensitive=True,
+                         value_enc=encrypt(load_key(KEY), rid_repo, "API_KEY", "dash-secret-value")))
         s.commit()
     settings.mogo_secret_key = KEY
     settings.llm_mode = "deepseek"
@@ -79,7 +80,7 @@ def test_secrets_reach_commands_override_env_and_are_masked(settings, sf, tmp_pa
 def test_a_bad_secret_is_a_warning_not_a_failure(settings, sf):
     ids = seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
     with sf() as s:
-        s.add(RepoSecret(repo_id=ids["acme/api"], name="X", value_enc="v1:garbage"))
+        s.add(RepoEnvVar(repo_id=ids["acme/api"], name="X", sensitive=True, value_enc="v1:garbage"))
         s.commit()
     settings.mogo_secret_key, settings.llm_mode = KEY, "deepseek"
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
@@ -94,7 +95,8 @@ def test_runner_credentials_never_reach_repo_commands(settings, sf, tmp_path, mo
     """Runner repo secrets are for the runner: a repo's commands get only its own env and secrets."""
     for name in ("GITHUB_TOKEN", "DEEPSEEK_API_KEY", "DATABASE_URL", "MOGO_SECRET_KEY", "ANTROTRIP_SERVER_JWT"):
         monkeypatch.setenv(name, "runner-only-value")
-    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api", env={"APP_MODE": "test"}, gates=[f"env > {tmp_path}/env"])})
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api", gates=[f"env > {tmp_path}/env"])},
+               env={"acme/api": {"APP_MODE": "test"}})
     settings.llm_mode = "deepseek"
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
     execute_run(make_run(sf, llm_mode="deepseek"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,

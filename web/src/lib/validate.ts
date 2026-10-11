@@ -77,13 +77,6 @@ export function validateRepoConfig(c: unknown): Result<Partial<RepoConfig>> {
     if (typeof v !== 'string' || v.length > 10000) return `config.${k} must be a string`
     out[k] = v
   }
-  if (c.env !== undefined) {
-    if (!isObj(c.env)) return 'config.env must be an object of NAME: value'
-    for (const [k, v] of Object.entries(c.env)) {
-      if (!ENV_NAME.test(k) || typeof v !== 'string') return `config.env: bad entry ${k}`
-    }
-    out.env = c.env as Record<string, string>
-  }
   if (c.allow_forks !== undefined) {
     if (typeof c.allow_forks !== 'boolean') return 'config.allow_forks must be true or false'
     out.allow_forks = c.allow_forks
@@ -178,18 +171,21 @@ export function validateStartInput(body: unknown): Result<StartInput> {
   return { repo_ids: repoIds, llm_mode: mode as LlmMode, dry_run: b.dry_run === true }
 }
 
-// --- repo secrets
+// --- repo environment variables
 
 /** Error message, or null when the name is fine. */
-export function secretNameError(name: string): string | null {
-  return ENV_NAME.test(name) && name.length <= 200 ? null : 'secret names look like ENV names: letters, digits, _'
+export function envNameError(name: string): string | null {
+  return ENV_NAME.test(name) && name.length <= 200 ? null : 'variable names look like ENV names: letters, digits, _'
 }
 
-export function validateSecretValue(body: unknown): Result<{ value: string }> {
-  const v = isObj(body) ? body.value : undefined
-  if (typeof v !== 'string' || !v) return 'value is required'
+export function validateEnvVar(body: unknown): Result<{ value?: string; sensitive: boolean }> {
+  if (!isObj(body)) return 'invalid JSON body'
+  if (typeof body.sensitive !== 'boolean') return 'sensitive must be true or false'
+  const v = body.value
+  if (v === undefined || v === null) return { sensitive: body.sensitive }
+  if (typeof v !== 'string' || !v) return 'value must be a non-empty string'
   if (v.length > 20000) return 'value must be up to 20000 chars'
-  return { value: v }
+  return { value: v, sensitive: body.sensitive }
 }
 
 export function validateEnvFile(body: unknown): Result<{ content: string }> {

@@ -21,6 +21,7 @@ from mogo.llm.provider import make_client, resolve_llm
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
 from mogo.profile.build import GitTree, Tree
+from mogo.profile.detect import install_command
 from mogo.profile.store import ensure_profile, save_profile_error
 from mogo.runner import sandbox
 from mogo.runner.review import render_summary, split_findings, verdict
@@ -132,7 +133,7 @@ def execute_run(
         stored, secret_problems = decrypt_all(settings.mogo_secret_key, ctx.repo_id, ctx.secrets)
         for problem in secret_problems:
             rec(f"repo secret unavailable: {problem}", "warn")
-        repo_env = {**cfg.env, **stored}  # a secret wins over a plain env value of the same name
+        repo_env = {**ctx.env, **stored}  # a sensitive value wins over a plain one with the same name
         rec.redact = Redactor(stored.values())
         if stored:
             rec(f"repo secrets: {', '.join(sorted(stored))}")
@@ -153,7 +154,11 @@ def execute_run(
         rec("checked out PR branch")
         builtin = _builtin_checks(rec, sf, ctx, gh, root, diff, owner, repo_name, settings.github_token, base_tree)
 
-        for cmd in cfg.setup:
+        setup = cfg.setup
+        if not setup and (detected := install_command({p.name for p in root.iterdir()})):
+            setup = [detected]
+            rec(f"install (from the lockfile): {detected}")
+        for cmd in setup:
             code, out = sandbox.run_cmd(cmd, root, env=repo_env)
             if code:
                 raise RunFailed(f"setup failed: `{cmd}`\n{sandbox.tail(out, 1500)}")

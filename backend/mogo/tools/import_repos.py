@@ -20,7 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 from mogo.config import RepoConfig, Settings
 from mogo.context import legacy_env_from
-from mogo.models import Project, Repo, make_session_factory
+from mogo.models import Project, Repo, RepoEnvVar, make_session_factory
 
 _COLUMNS = ("role", "default_branch")
 
@@ -36,8 +36,9 @@ def import_repos(
             # Old files pointed at runner repo secrets. Those stay with the runner: re-enter the values as Secrets.
             warn(f"{e.get('name')}: env_from is not imported; add under Secrets on the repo page: {', '.join(names)}")
         e.pop("env_from", None)
+        env = {str(k): str(v) for k, v in (e.pop("env", None) or {}).items()}  # plain variables
         cfg = RepoConfig(**e)  # validates before anything is written
-        parsed.append((cfg, cols))
+        parsed.append((cfg, cols, env))
 
     with sf() as s:
         project = s.scalars(select(Project).where(func.lower(Project.name) == project_name.lower())).first()
@@ -48,7 +49,7 @@ def import_repos(
         elif description:
             project.description = description
         names = []
-        for cfg, cols in parsed:
+        for cfg, cols, env in parsed:
             repo = s.scalars(select(Repo).where(
                 Repo.project_id == project.id, func.lower(Repo.full_name) == cfg.name.lower(),
             )).first()
@@ -58,6 +59,13 @@ def import_repos(
             repo.config = cfg.model_dump(exclude={"name"})
             repo.role = cols.get("role", repo.role or "")
             repo.default_branch = cols.get("default_branch", repo.default_branch or "main")
+            s.flush()
+            for k, v in env.items():
+                row = s.get(RepoEnvVar, (repo.id, k))
+                if row is None:
+                    s.add(RepoEnvVar(repo_id=repo.id, name=k, sensitive=False, value=v))
+                elif not row.sensitive:  # never overwrite a secret with a plain value
+                    row.value = v
             names.append(cfg.name)
         s.commit()
         return names

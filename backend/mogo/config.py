@@ -89,7 +89,6 @@ class RepoConfig(BaseModel):
     prepare: list[str] = Field(default_factory=list)  # after services_cmd, before start: migrate, seed
     start: str = ""
     healthcheck: str = ""
-    env: dict[str, str] = Field(default_factory=dict)  # plain values; secrets are stored encrypted in repo_secrets
     conventions: list[str] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)
     notes: str = ""  # shown to the agent verbatim: seeded accounts, how to log in, known limits

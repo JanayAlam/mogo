@@ -11,7 +11,6 @@ export interface RepoConfig {
   prepare: string[]
   start: string
   healthcheck: string
-  env: Record<string, string>
   conventions: string[]
   rules: string[]
   notes: string
@@ -38,6 +37,18 @@ export interface ProfileInfo {
   files: number | null
   types: number | null
   summary?: string // only from getRepo
+  suggestions?: Suggestions | null // only from getRepo
+}
+
+/** Run settings the runner read from the source branch (backend/mogo/profile/detect.py). */
+export interface Suggestions {
+  package_manager?: string
+  install: string
+  checks: string[]
+  test_cmd: string
+  start: string
+  app_url: string
+  env_names: string[]
 }
 
 export interface ProjectSummary {
@@ -83,7 +94,7 @@ const PROFILE_FIELDS = `'main_sha', rp.main_sha, 'built_at', rp.built_at, 'error
 const REPO_COLUMNS = `r.id, r.project_id, r.full_name, r.role, r.default_branch, r.config, r.created_at, r.updated_at,
   (select json_build_object(${PROFILE_FIELDS}) from repo_profiles rp where rp.repo_id = r.id) as profile`
 const REPO_DETAIL_COLUMNS = `r.id, r.project_id, r.full_name, r.role, r.default_branch, r.config, r.created_at, r.updated_at,
-  (select json_build_object(${PROFILE_FIELDS}, 'summary', rp.summary)
+  (select json_build_object(${PROFILE_FIELDS}, 'summary', rp.summary, 'suggestions', rp.suggestions)
    from repo_profiles rp where rp.repo_id = r.id) as profile`
 
 export async function getProject(id: string): Promise<ProjectRow | null> {

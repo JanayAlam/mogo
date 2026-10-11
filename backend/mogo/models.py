@@ -57,17 +57,20 @@ class RepoProfile(Base):
     structure: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     type_index: Mapped[list | None] = mapped_column(JSON, nullable=True)
     summary: Mapped[str] = mapped_column(Text, default="")
+    suggestions: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # settings read from the branch
     error: Mapped[str] = mapped_column(Text, default="")  # last failed rebuild; the profile above is still the last good one
     built_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
-class RepoSecret(Base):
-    """Encrypted per-repo secret (mogo/secrets.py). Only the runner decrypts."""
-    __tablename__ = "repo_secrets"
+class RepoEnvVar(Base):
+    """One environment variable of a repo. Sensitive ones are encrypted (mogo/secrets.py), the rest plain text."""
+    __tablename__ = "repo_env"
 
     repo_id: Mapped[str] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), primary_key=True)
-    value_enc: Mapped[str] = mapped_column(Text)
+    sensitive: Mapped[bool] = mapped_column(Boolean, default=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)  # when not sensitive
+    value_enc: Mapped[str | None] = mapped_column(Text, nullable=True)  # when sensitive
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

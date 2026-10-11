@@ -1,18 +1,52 @@
 "use client";
 
+import { Plus } from "lucide-react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
+import { useRouter } from "nextjs-toploader/app";
 import { useState } from "react";
+import { toast } from "sonner";
 
-import { ErrorText, Modal, Shell, StatusBadge, timeAgo, useAction, useApi } from "@/components/ui-kit";
-import { api, type Project } from "@/lib/client";
+import { ItemCardsSkeleton, ProjectSkeleton } from "@/components/skeletons";
+import {
+  BackLink,
+  Chip,
+  ConfirmButton,
+  ErrorText,
+  Eyebrow,
+  Field,
+  Modal,
+  Shell,
+  StatusBadge,
+  timeAgo,
+  useAction,
+  useApi,
+} from "@/components/ui-kit";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { BUILTIN_CHECKS, checkEnabled } from "@/lib/checks";
+import { api, type Project } from "@/lib/client";
 import { ROLE_SUGGESTIONS } from "@/lib/repo-form";
 import { type ReviewState, runState } from "@/lib/status";
 
 type Tab = "all" | "queue" | "failed" | "done";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "queue", label: "Queue" },
+  { id: "failed", label: "Failed" },
+  { id: "done", label: "Done" },
+];
+
 const inTab = (tab: Tab, s: ReviewState) =>
-  tab === "all" || (tab === "queue" && (s === "queued" || s === "running")) || tab === s;
+  tab === "all" ||
+  (tab === "queue" && (s === "queued" || s === "running")) ||
+  tab === s;
 
 export function ProjectView() {
   const { id } = useParams<{ id: string }>();
@@ -33,172 +67,287 @@ export function ProjectView() {
     return (
       <Shell>
         <ErrorText error={project.error} />
-        {!project.error && <p className="text-muted-foreground">Loading…</p>}
+        {!project.error && <ProjectSkeleton />}
       </Shell>
     );
   }
 
   const all = features.data ?? [];
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "all", label: "All" },
-    { id: "queue", label: "Queue" },
-    { id: "failed", label: "Failed" },
-    { id: "done", label: "Done" },
-  ];
   const shown = all.filter((f) => inTab(tab, f.state));
 
   return (
     <Shell>
-      <Link href="/" className="font-mono text-xs text-muted-foreground hover:text-foreground">← projects</Link>
+      <BackLink href="/">Back to projects</BackLink>
       <div className="mt-3 mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">{p.name}</h1>
-          <p className="mt-1 max-w-2xl text-muted-foreground">{p.description}</p>
+          <p className="mt-1 max-w-2xl text-muted-foreground">
+            {p.description}
+          </p>
         </div>
         <div className="flex gap-2">
-          <button className="btn-ghost" onClick={() => setEditOpen(true)}>Edit</button>
-          <button
-            className="btn-ghost"
-            disabled={del.busy}
-            onClick={() => {
-              if (!confirm(`Delete ${p.name} with its repos, features and run history?`)) return;
+          <Button variant="outline" onClick={() => setEditOpen(true)}>
+            Edit
+          </Button>
+          <ConfirmButton
+            variant="outline"
+            loading={del.busy}
+            title={`Delete ${p.name}?`}
+            description="Its repos, features, secrets and run history are deleted too. This cannot be undone."
+            onConfirm={() =>
               del.run(async () => {
                 await api.deleteProject(p.id);
                 router.push("/");
-              });
-            }}>
+              })
+            }>
             Delete
-          </button>
-          <Link
-            href={`/projects/${p.id}/features/new`}
-            className={`btn-primary ${p.repos.length === 0 ? "pointer-events-none opacity-50" : ""}`}
-            aria-disabled={p.repos.length === 0}>
-            + New feature
-          </Link>
+          </ConfirmButton>
+          {p.repos.length === 0 ? (
+            <Button disabled>
+              <Plus /> New feature
+            </Button>
+          ) : (
+            <Button asChild>
+              <Link href={`/projects/${p.id}/features/new`}>
+                <Plus /> New feature
+              </Link>
+            </Button>
+          )}
         </div>
       </div>
       <ErrorText error={del.error} />
 
       <div className="grid gap-6 lg:grid-cols-[300px_1fr]">
-        <aside className="panel h-fit p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-mono text-xs tracking-wider text-muted-foreground uppercase">Repositories</h2>
-            <button className="font-mono text-xs text-primary hover:underline" onClick={() => setRepoOpen(true)}>+ add</button>
-          </div>
-          <ul className="space-y-1">
-            {p.repos.map((r) => (
-              <li key={r.id}>
-                <Link href={`/projects/${p.id}/repos/${r.id}`} className="block rounded-md px-2 py-2 hover:bg-accent">
-                  <p className="truncate font-mono text-sm" title={r.full_name}>{r.full_name}</p>
-                  <p className="mt-1 flex items-center gap-2 truncate text-xs text-muted-foreground">
-                    <span className="chip">{r.role || "no role"}</span>
-                    {r.default_branch} ·{" "}
-                    {r.profile?.main_sha ? `learned @ ${r.profile.main_sha.slice(0, 7)} · ${timeAgo(r.profile.built_at)}` : "not learned yet"}
-                    {r.profile?.error && <span className="text-warning" title={r.profile.error}> · last update failed</span>}
-                  </p>
-                </Link>
-              </li>
-            ))}
-            {p.repos.length === 0 && (
-              <li className="px-2 py-3 text-sm text-muted-foreground">Add the project&apos;s repos to start creating features.</li>
-            )}
-          </ul>
-        </aside>
+        <Card className="h-fit">
+          <CardContent className="p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <Eyebrow>Repositories</Eyebrow>
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0 font-mono text-xs"
+                onClick={() => setRepoOpen(true)}>
+                + add
+              </Button>
+            </div>
+            <ul className="space-y-1">
+              {p.repos.map((r) => (
+                <li key={r.id}>
+                  <Link
+                    href={`/projects/${p.id}/repos/${r.id}`}
+                    className="block rounded-md px-2 py-2 hover:bg-accent">
+                    <p
+                      className="truncate font-mono text-sm"
+                      title={r.full_name}>
+                      {r.full_name}
+                    </p>
+                    <p className="mt-1 flex items-center gap-2 truncate text-xs text-muted-foreground">
+                      <Chip>{r.role || "no role"}</Chip>
+                      {r.default_branch} ·{" "}
+                      {r.profile?.main_sha
+                        ? `learned ${timeAgo(r.profile.built_at)}`
+                        : "not learned yet"}
+                      {r.profile?.error && (
+                        <span className="text-warning" title={r.profile.error}>
+                          · update failed
+                        </span>
+                      )}
+                    </p>
+                  </Link>
+                </li>
+              ))}
+              {p.repos.length === 0 && (
+                <li className="px-2 py-3 text-sm text-muted-foreground">
+                  Add the project&apos;s repos to start creating features.
+                </li>
+              )}
+            </ul>
+          </CardContent>
+        </Card>
 
         <section>
-          <div className="mb-4 flex gap-1 border-b border-border">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`-mb-px border-b-2 px-4 py-2 text-sm transition-colors ${tab === t.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                {t.label}{" "}
-                <span className="ml-1 font-mono text-xs text-muted-foreground">
-                  {all.filter((f) => inTab(t.id, f.state)).length}
-                </span>
-              </button>
-            ))}
-          </div>
+          <Tabs
+            value={tab}
+            onValueChange={(v) => setTab(v as Tab)}
+            className="mb-4">
+            <TabsList>
+              {TABS.map((t) => (
+                <TabsTrigger key={t.id} value={t.id}>
+                  {t.label}
+                  <span className="ml-1.5 font-mono text-xs text-muted-foreground">
+                    {all.filter((f) => inTab(t.id, f.state)).length}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
           <ErrorText error={features.error} />
+          {!features.data && !features.error && <ItemCardsSkeleton />}
           <div className="space-y-2">
             {shown.map((f) => (
-              <Link key={f.id} href={`/projects/${p.id}/features/${f.id}`} className="panel block p-4 transition-colors hover:border-primary/50">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge state={f.state} />
-                  <span className="font-mono text-xs text-muted-foreground">{timeAgo(f.updated_at)}</span>
-                </div>
-                <h3 className="mt-2 font-medium">{f.title}</h3>
-                {f.description && <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{f.description}</p>}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {f.repos.map((r) => (
-                    <span key={r.id} className="inline-flex items-center gap-1.5">
-                      <span className="chip">{r.role || r.full_name.split("/")[1]} #{r.pr_number}</span>
-                      <StatusBadge state={runState(r.latest_run)} />
-                    </span>
-                  ))}
-                </div>
+              <Link
+                key={f.id}
+                href={`/projects/${p.id}/features/${f.id}`}
+                className="group block">
+                <Card className="transition-colors group-hover:border-primary/50">
+                  <CardContent className="p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge state={f.state} />
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {timeAgo(f.updated_at)}
+                      </span>
+                    </div>
+                    <h3 className="mt-2 font-medium">{f.title}</h3>
+                    {f.description && (
+                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                        {f.description}
+                      </p>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {f.repos.map((r) => (
+                        <span
+                          key={r.id}
+                          className="inline-flex items-center gap-1.5">
+                          <Chip>
+                            {r.role || r.full_name.split("/")[1]} #{r.pr_number}
+                          </Chip>
+                          <StatusBadge state={runState(r.latest_run)} />
+                        </span>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
               </Link>
             ))}
             {features.data && shown.length === 0 && (
-              <div className="panel p-10 text-center text-sm text-muted-foreground">
-                {all.length === 0 ? "No features yet. Create one to have its PRs checked." : "Nothing here."}
-              </div>
+              <Card>
+                <CardContent className="p-10 text-center text-sm text-muted-foreground">
+                  {all.length === 0
+                    ? "No features yet. Create one to have its PRs checked."
+                    : "Nothing here."}
+                </CardContent>
+              </Card>
             )}
           </div>
         </section>
       </div>
 
-      <AddRepoModal open={repoOpen} onClose={() => setRepoOpen(false)} projectId={p.id} onAdded={(rid) => router.push(`/projects/${p.id}/repos/${rid}`)} />
-      <EditProjectModal open={editOpen} onClose={() => setEditOpen(false)} project={p} onSaved={project.reload} />
+      <AddRepoModal
+        open={repoOpen}
+        onClose={() => setRepoOpen(false)}
+        projectId={p.id}
+        onAdded={(rid, learning) =>
+          router.push(`/projects/${p.id}/repos/${rid}${learning ? "?learning=1" : ""}`)
+        }
+      />
+      <EditProjectModal
+        key={editOpen ? "open" : "closed"}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        project={p}
+        onSaved={project.reload}
+      />
     </Shell>
   );
 }
 
-function AddRepoModal({ open, onClose, projectId, onAdded }: { open: boolean; onClose: () => void; projectId: string; onAdded: (id: string) => void }) {
+function AddRepoModal({
+  open,
+  onClose,
+  projectId,
+  onAdded,
+}: {
+  open: boolean;
+  onClose: () => void;
+  projectId: string;
+  onAdded: (id: string, learning: boolean) => void;
+}) {
   const [fullName, setFullName] = useState("");
   const [role, setRole] = useState("");
   const [branch, setBranch] = useState("main");
   const action = useAction();
+  // Pages stay mounted in the background after navigating away, so the dialog must clear itself.
+  const close = () => {
+    setFullName("");
+    setRole("");
+    setBranch("main");
+    action.setError("");
+    onClose();
+  };
   return (
-    <Modal open={open} onClose={onClose} title="Add repository">
+    <Modal
+      open={open}
+      onClose={close}
+      title="Add repository"
+      description="Settings are read from its source branch and suggested on the next screen.">
       <form
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
           action.run(async () => {
-            const { id } = await api.addRepo(projectId, { full_name: fullName.trim(), role: role.trim(), default_branch: branch.trim() || "main" });
-            onAdded(id);
+            const { id, learning } = await api.addRepo(projectId, {
+              full_name: fullName.trim(),
+              role: role.trim(),
+              default_branch: branch.trim() || "main",
+            });
+            close();
+            onAdded(id, learning);
           });
         }}>
-        <div>
-          <label className="label" htmlFor="r-name">Repository</label>
-          <input id="r-name" className="field font-mono" required value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="org/repo or https://github.com/org/repo" autoFocus />
-        </div>
+        <Field label="Repository" htmlFor="r-name">
+          <Input
+            id="r-name"
+            className="font-mono"
+            required
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="org/repo or https://github.com/org/repo"
+            autoFocus
+          />
+        </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="r-role">Role</label>
+          <Field label="Role" htmlFor="r-role">
             <RoleInput id="r-role" value={role} onChange={setRole} />
-          </div>
-          <div>
-            <label className="label" htmlFor="r-branch">Source of truth branch</label>
-            <input id="r-branch" className="field font-mono" value={branch} onChange={(e) => setBranch(e.target.value)} />
-          </div>
+          </Field>
+          <Field label="Source of truth branch" htmlFor="r-branch">
+            <Input
+              id="r-branch"
+              className="font-mono"
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+            />
+          </Field>
         </div>
-        <p className="text-xs text-muted-foreground">Commands, env and test notes are set on the next screen.</p>
         <ErrorText error={action.error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={action.busy}>Add repo</button>
+          <Button type="button" variant="outline" onClick={close}>
+            Cancel
+          </Button>
+          <Button loading={action.busy}>Add repo</Button>
         </div>
       </form>
     </Modal>
   );
 }
 
-export function RoleInput({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+export function RoleInput({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
     <>
-      <input id={id} className="field" list={`${id}-roles`} value={value} onChange={(e) => onChange(e.target.value)} placeholder="backend, frontend, admin-frontend…" />
+      <Input
+        id={id}
+        list={`${id}-roles`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="backend, frontend, admin-frontend…"
+      />
       <datalist id={`${id}-roles`}>
         {ROLE_SUGGESTIONS.map((r) => (
           <option key={r} value={r} />
@@ -208,11 +357,23 @@ export function RoleInput({ id, value, onChange }: { id: string; value: string; 
   );
 }
 
-function EditProjectModal({ open, onClose, project, onSaved }: { open: boolean; onClose: () => void; project: Project; onSaved: () => void }) {
+function EditProjectModal({
+  open,
+  onClose,
+  project,
+  onSaved,
+}: {
+  open: boolean;
+  onClose: () => void;
+  project: Project;
+  onSaved: () => void;
+}) {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description);
   const [checks, setChecks] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(BUILTIN_CHECKS.map((c) => [c.id, checkEnabled(project.settings, c.id)])),
+    Object.fromEntries(
+      BUILTIN_CHECKS.map((c) => [c.id, checkEnabled(project.settings, c.id)]),
+    ),
   );
   const action = useAction();
   return (
@@ -229,34 +390,52 @@ function EditProjectModal({ open, onClose, project, onSaved }: { open: boolean; 
             });
             onSaved();
             onClose();
+            toast.success("Project saved");
           });
         }}>
-        <div>
-          <label className="label" htmlFor="e-name">Name</label>
-          <input id="e-name" className="field" required value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div>
-          <label className="label" htmlFor="e-desc">Description</label>
-          <textarea id="e-desc" className="field min-h-24" value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <fieldset>
-          <legend className="label">Built-in checks</legend>
-          <div className="space-y-2">
-            {BUILTIN_CHECKS.map((c) => (
-              <label key={c.id} className="flex items-start gap-3 text-sm">
-                <input type="checkbox" className="mt-1" checked={checks[c.id]} onChange={(e) => setChecks({ ...checks, [c.id]: e.target.checked })} />
-                <span>
-                  {c.title}
-                  <span className="block text-xs text-muted-foreground">{c.description}</span>
+        <Field label="Name" htmlFor="e-name">
+          <Input
+            id="e-name"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        <Field label="Description" htmlFor="e-desc">
+          <Textarea
+            id="e-desc"
+            className="min-h-24"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </Field>
+        <fieldset className="space-y-3">
+          <legend className="mb-3 text-sm font-medium">Built-in checks</legend>
+          {BUILTIN_CHECKS.map((c) => (
+            <div key={c.id} className="flex items-start gap-3">
+              <Checkbox
+                id={`check-${c.id}`}
+                className="mt-0.5"
+                checked={checks[c.id]}
+                onCheckedChange={(v) =>
+                  setChecks({ ...checks, [c.id]: v === true })
+                }
+              />
+              <Label htmlFor={`check-${c.id}`} className="leading-snug">
+                {c.title}
+                <span className="mt-1 block text-xs font-normal text-muted-foreground">
+                  {c.description}
                 </span>
-              </label>
-            ))}
-          </div>
+              </Label>
+            </div>
+          ))}
         </fieldset>
         <ErrorText error={action.error} />
         <div className="flex justify-end gap-2">
-          <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={action.busy}>Save</button>
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button loading={action.busy}>Save</Button>
         </div>
       </form>
     </Modal>

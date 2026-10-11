@@ -43,28 +43,24 @@ other repos of the feature (their roles and PRs, so contract mismatches are visi
 
 ### Repo settings
 
-Set on the repo page (stored in the `repos.config` column):
+When a repo is added, the runner reads its source of truth branch (`package.json`, the lockfile, `tsconfig.json`,
+`pyproject.toml`, `.env.example`) and the repo page offers what it found under **Detected on main**: checks (lint,
+type check, format check), test command, start script and app URL. **Use these** fills the empty fields; nothing is
+saved until you click Save. **Re-learn now** reads the branch again.
 
-```yaml
-setup: ["npm ci"] # install deps
-gates: ["npx tsc --noEmit", "npx eslint ."] # deterministic checks, run before the LLM
-test_cmd: "npm test --silent"
-services_cmd: "docker compose up -d db redis" # optional
-services_down: "docker compose down" # optional: always run when the run ends
-prepare: ["npx prisma migrate deploy", "npm run seed"] # optional: after services, before start (migrate, seed)
-start: "npm run dev" # optional: boots the app for feature tests
-healthcheck: "http://localhost:3000/health"
-env: { PORT: "3000" } # plain values; keys and passwords go in Secrets (encrypted), see below
-conventions: ["CONVENTIONS.md", "CLAUDE.md"] # files in the target repo
-rules: ["Controllers must not contain business logic."]
-notes: "Seeded login: test@example.com / ..." # optional: shown to the agent (accounts, how to log in)
-allow_forks: false
-```
+| Section | What it is | Stored as (`repos.config`) |
+| --- | --- | --- |
+| **Checks** | commands run on every review after installing; any failure requests changes | `gates` |
+| **Run the app** | off = review only. On: a start script (earlier lines run first, the last one starts the app) and the URL the run waits for before the agent tests | `prepare` + `start`, `healthcheck` |
+| **Agent notes** | convention files, extra rules, testing notes (accounts, how to log in) | `conventions`, `rules`, `notes` |
+| **Advanced** | install override, test command for the agent, stop command, fork PRs | `setup`, `test_cmd`, `services_down`, `allow_forks` |
 
-Without `start`, the run is review-only plus whatever the agent can verify with `test_cmd`.
+Without an install override the runner installs from the lockfile: `pnpm install --frozen-lockfile` (with
+`corepack enable`), `yarn install --immutable` or `--frozen-lockfile`, `npm ci`, `bun install --frozen-lockfile`,
+`uv sync`, `poetry install` or `pip install -r requirements.txt`.
 
-Order of a run: `setup`, `gates`, then (feature given and `start` set) `services_cmd`, `prepare`, `start`, the agent, and finally `services_down`.
-If a `prepare` command fails the app is not started and the agent is told why.
+Order of a run: install, checks, then (feature given and the app runs) the start script lines, the app, the agent, and
+finally the stop command. If a line before the last fails, the app is not started and the agent is told why.
 
 Anyone who can sign in to the web app can change these commands, and the runner executes them. Treat the dashboard
 password like push access to the runner repo.
@@ -102,36 +98,31 @@ python -m mogo.tools.import_repos /tmp/repos.yaml --project "My product" --descr
 
 Re-running it updates the same project and repos by name.
 
-### Test environment variables
+### Environment variables
 
-Each repo has its own environment, set on its repo page. Commands from a PR see only that and never the runner's
-own credentials (see [Safety](#safety)):
+Each repo has one list of environment variables, set on its repo page. Its commands get only these, never the
+runner's own credentials (see [Safety](#safety)); the runner repo's Actions secrets are for the runner only.
 
-| Kind | Where the value lives | For |
-| --- | --- | --- |
-| **Env** | database, plain text | ports, local URLs, feature flags |
-| **Secrets** | database, encrypted (AES-256-GCM with `MOGO_SECRET_KEY`) | API keys, passwords, database URLs |
-
-A secret wins over an env value with the same name. The runner repo's Actions secrets are for the runner only and
-are never passed to a repo.
-
-**Secrets** are typed in the UI and encrypted by the web app before they are stored. They cannot be shown again, only
-replaced or deleted. **Import .env file** on the repo page saves every `NAME=value` of a file as a secret: names that
-exist get the new value, new names are added, and secrets missing from the file are kept. A preview lists the names
-(new / replaced / skipped lines) before anything is saved; values are never shown or returned. Each value is bound to its repo and name, so a stored value copied onto another repo or name
-does not decrypt. Only the runner decrypts, for that repo's commands.
+- **Plain** variables (`PORT=8000`, `SMTP_HOST=localhost`) are stored as text and can be viewed and edited.
+- **Sensitive** variables are encrypted by the web app (AES-256-GCM with `MOGO_SECRET_KEY`) before they are stored,
+  can't be shown again, only replaced, and are masked (`***`) in the run log, the stored result, the posted review and
+  everything sent to the LLM. Each value is bound to its repo and name, so it can't be copied onto another one.
+- A plain variable can be switched to sensitive in place (its value gets encrypted). A sensitive one becomes plain
+  only with a new value, so a switch can't reveal it.
+- **Import .env file** saves every `NAME=value` of a file: existing names get the new value and keep their kind, new
+  names are sensitive when they look like credentials (`*_SECRET`, `*_PASSWORD`, `*_TOKEN`, `*_KEY`, `DATABASE_URL`,
+  ...), and variables missing from the file are kept. A preview lists the names first; values are never shown.
 
 Set the same `MOGO_SECRET_KEY` (create one with `openssl rand -base64 32`) on Vercel and as an Actions secret of the
-runner repo (and in `backend/.env` for the CLI). Without it the UI cannot save secrets and runs warn that they are
-unavailable. Changing the key makes stored secrets unreadable: re-enter them.
+runner repo (and in `backend/.env` for the CLI). Without it plain variables still work, sensitive ones can't be saved,
+and runs warn that stored sensitive values are unavailable. Changing the key makes them unreadable: re-enter them.
 
-The runner masks secret values (`***`) in the run log, the stored result, the review it posts and everything it sends to
-the LLM (prompt and tool output). Masking catches accidents, not a PR built to leak: **use test-only credentials with
-spend limits**, never production ones, because the PR's code can read them.
+**Use test-only credentials with spend limits**, never production ones: the PR's code can read every variable, and
+masking catches accidents, not a PR built to leak.
 
 Coming from `env_from` (repo values kept in the runner repo's Actions secrets): it is no longer read. Runs and the repo
-page list the names still configured; add their values under Secrets, save the repo page (which drops the old list),
-then delete those secrets from the runner repo.
+page list the names still configured; add their values here, save the repo page (which drops the old list), then
+delete those secrets from the runner repo.
 
 ### Seed data
 

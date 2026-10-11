@@ -148,8 +148,8 @@ def _boot_cfg(tmp_path, **kw):
     )}
 
 
-def _run_feature(settings, cfg, sf, llm):
-    seed_repos(sf, cfg)
+def _run_feature(settings, cfg, sf, llm, env=None):
+    seed_repos(sf, cfg, env=env)
     rid = make_run(sf, feature="thing works", llm_mode="deepseek")
     settings.llm_mode = "deepseek"
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
@@ -160,11 +160,10 @@ def test_prepare_runs_before_start_with_seeds_dir_and_notes_reach_the_agent(sett
     cfg = _boot_cfg(
         tmp_path,
         prepare=[f'test -d "$MOGO_SEEDS_DIR" && echo "$APP_MODE" > {tmp_path}/prepared'],
-        env={"APP_MODE": "test"},
         notes="ACCOUNT-NOTE: log in as traveler@seed.test",
     )
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    rid = _run_feature(settings, cfg, sf, llm)
+    rid = _run_feature(settings, cfg, sf, llm, env={"acme/api": {"APP_MODE": "test"}})
     assert (tmp_path / "prepared").read_text().strip() == "test"
     assert "ACCOUNT-NOTE: log in as traveler@seed.test" in llm.first_user_prompt
     assert "health check http://localhost:8766 OK" in llm.first_user_prompt

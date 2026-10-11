@@ -1,13 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "shadcn/tailwind.css";
 
-/* Theme from the Lovable design (PR Genius Dashboard): dark, lime primary, Plex Sans + JetBrains Mono. */
+/* Theme from the Lovable design (PR Genius Dashboard): dark, lime primary, Poppins + JetBrains Mono. */
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-poppins), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   --font-heading: var(--font-sans);
   --radius-sm: calc(var(--radius) - 4px);
@@ -74,28 +73,23 @@
     color: var(--color-foreground);
     font-family: var(--font-sans);
   }
-}
-
-@utility btn-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-md bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/85 disabled:opacity-50;
-}
-@utility btn-ghost {
-  @apply inline-flex items-center justify-center gap-2 rounded-md border border-border bg-transparent px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50;
-}
-@utility btn-danger {
-  @apply inline-flex items-center justify-center gap-2 rounded-md border border-destructive/40 bg-transparent px-3.5 py-2 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:opacity-50;
-}
-@utility field {
-  @apply w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/50 focus:outline-none;
-}
-@utility label {
-  @apply mb-1.5 block font-mono text-xs tracking-wider text-muted-foreground uppercase;
-}
-@utility panel {
-  @apply rounded-lg border border-border bg-card;
-}
-@utility chip {
-  @apply rounded bg-secondary px-2 py-0.5 font-mono text-xs whitespace-nowrap text-secondary-foreground;
+  /* Tailwind v4 gives buttons the default cursor; everything clickable gets the pointer. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"],
+  [role="checkbox"],
+  [role="switch"],
+  [role="combobox"],
+  [role="option"],
+  [role="checkbox"] ~ label,
+  [role="switch"] ~ label,
+  summary {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }
 
 @keyframes pulse-dot {
@@ -109,4 +103,12 @@
 }
 .animate-pulse-dot {
   animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+/* Toast icons in the theme colors (Sonner's own attributes). */
+[data-sonner-toast][data-type="success"] [data-icon] {
+  color: var(--success);
+}
+[data-sonner-toast][data-type="error"] [data-icon] {
+  color: var(--destructive);
 }

@@ -31,6 +31,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - "Re-learn now" on the repo page and `python -m mogo.runner --profile <repo id>`; the workflow takes `profile_repo_id`.
 - Web app redesigned after the Lovable "PR Genius Dashboard" design: projects dashboard, project page, repo settings,
   feature form and feature page with criteria, findings, gates and the live log.
+- The web app uses the Lovable design system: its shadcn (new-york, Radix) components and theme tokens, with Poppins as
+  the sans font. Confirm dialogs replace browser prompts; toasts report saves, imports and started runs.
+- "Log out" in the header when the deployment has a login (`APP_PASSWORD`); nothing is shown otherwise.
+- Top loading bar on navigation, skeleton placeholders while pages load, pointer cursor on everything clickable.
+- One environment variable list per repo (migration 004: `repo_secrets` becomes `repo_env` with a `sensitive` flag;
+  the plain `env` values of repo settings move into it). Plain values are viewable and editable, sensitive ones
+  encrypted and write-only; a plain variable can turn sensitive in place, the reverse needs a new value. The .env
+  import marks names that look like credentials as sensitive.
+- Repo settings detected from the source branch (package.json, lockfile, tsconfig.json, pyproject.toml,
+  .env.example) when a repo is added or re-learned, offered as "Detected on main" with "Use these".
+- Simpler repo form: Checks, Run the app (start script + app URL), Agent notes, and a collapsed Advanced section.
+  Without an install override the runner installs from the lockfile.
+- `Button` takes `loading`: a spinner replaces its icon and it is disabled. Used for every action button; only the
+  button that started an action spins.
+- Create dialogs (project, repo) and the new-feature form clear themselves after creating; previously the dialog
+  reappeared with the old values after navigating back.
 - `AUTH_DISABLED=true` opens a production deployment that has no `APP_PASSWORD`.
 - antrotrip-server: Postgres is the shared development database (no `mogo-pg`
   container). mogo no longer migrates or seeds it; `prepare` only runs `prisma generate`.

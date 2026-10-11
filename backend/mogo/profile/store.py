@@ -14,7 +14,8 @@ def load_profile(sf: sessionmaker, repo_id: str, branch: str) -> Profile | None:
         row = s.get(RepoProfile, repo_id)
         if row is None or row.structure is None:
             return None
-        p = Profile(main_sha=row.main_sha, branch=branch, structure=row.structure, type_index=row.type_index or [])
+        p = Profile(main_sha=row.main_sha, branch=branch, structure=row.structure, type_index=row.type_index or [],
+                    suggestions=row.suggestions or {})
         p.summary = row.summary or render_summary(p)
         return p
 
@@ -22,8 +23,8 @@ def load_profile(sf: sessionmaker, repo_id: str, branch: str) -> Profile | None:
 def save_profile(sf: sessionmaker, repo_id: str, p: Profile) -> None:
     with sf() as s:
         row = s.get(RepoProfile, repo_id) or RepoProfile(repo_id=repo_id)
-        row.main_sha, row.structure, row.type_index, row.summary, row.error = (
-            p.main_sha, p.structure, p.type_index, p.summary, ""
+        row.main_sha, row.structure, row.type_index, row.summary, row.suggestions, row.error = (
+            p.main_sha, p.structure, p.type_index, p.summary, p.suggestions, ""
         )
         s.add(row)
         s.commit()
