@@ -8,8 +8,13 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+# backend/.env, wherever the command runs from (the web app has its own web/.env.local). Real env vars override it.
+ENV_FILE = BACKEND_DIR / ".env"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)  # errors never echo secrets
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore", hide_input_in_errors=True)  # errors never echo secrets
 
     github_token: str = ""
 
@@ -22,10 +27,9 @@ class Settings(BaseSettings):
 
     database_url: str  # required: Supabase Postgres connection string (pooler URL)
     sentry_dsn: str = ""
+    mogo_secret_key: str = ""  # base64, 32 bytes: decrypts repo secrets entered in the web app
     environment: str  # required: set ENVIRONMENT (e.g. dev, staging, production)
     log_level: str = "INFO"
-
-    repos_file: str = "../repos.yaml"
 
     max_agent_steps: int = 25
     run_timeout_s: int = 1200
@@ -39,7 +43,7 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL is empty (on Actions: the DATABASE_URL secret is missing in the runner repo)")
         if not v.startswith(("postgres://", "postgresql://", "postgresql+psycopg://")):
             raise ValueError("DATABASE_URL must start with postgresql:// (copy the Supabase pooler connection string)")
-        return v
+        return _drop_prisma_options(_encode_at_in_password(v))
 
     @property
     def db_url(self) -> str:
@@ -49,12 +53,30 @@ class Settings(BaseSettings):
         return self.database_url
 
 
-# The runner's own credentials. `env_from` copies real values from the runner, so it may not read these.
-# (Exposing another secret under one of these names, e.g. DATABASE_URL: ANTROTRIP_SERVER_DATABASE_URL, is fine.)
-RESERVED_ENV = frozenset({
-    "GITHUB_TOKEN", "AGENT_GITHUB_TOKEN", "DEEPSEEK_API_KEY", "DATABASE_URL", "SENTRY_DSN",
-    "LOCAL_LLM_BASE_URL", "LOCAL_LLM_MODEL", "MOGO_SECRETS_JSON", "ACTIONS_RUNTIME_TOKEN",
+def _encode_at_in_password(url: str) -> str:
+    """Supabase shows the connection string with the raw password; an '@' in it would be read as the host separator.
+    The last '@' before the host is the real one, so earlier ones are percent-encoded."""
+    scheme, sep, rest = url.partition("://")
+    authority, slash, tail = rest.partition("/")
+    userinfo, at, host = authority.rpartition("@")
+    if not at or "@" not in userinfo:
+        return url
+    return f"{scheme}{sep}{userinfo.replace('@', '%40')}@{host}{slash}{tail}"
+
+
+# Prisma-only query options (connection strings are often copied from a Prisma app); libpq rejects them.
+PRISMA_OPTIONS = frozenset({
+    "connection_limit", "pool_timeout", "pgbouncer", "schema", "statement_cache_size", "socket_timeout",
+    "sslaccept", "sslidentity", "sslpassword",
 })
+
+
+def _drop_prisma_options(url: str) -> str:
+    base, q, query = url.partition("?")
+    if not q:
+        return url
+    kept = [kv for kv in query.split("&") if kv and kv.split("=", 1)[0] not in PRISMA_OPTIONS]
+    return base + ("?" + "&".join(kept) if kept else "")
 
 
 class RepoConfig(BaseModel):
@@ -67,34 +89,15 @@ class RepoConfig(BaseModel):
     prepare: list[str] = Field(default_factory=list)  # after services_cmd, before start: migrate, seed
     start: str = ""
     healthcheck: str = ""
-    env: dict[str, str] = Field(default_factory=dict)  # plain test values, committed
-    # Sandbox name -> runner secret name, never committed. A plain list means the same name on both sides.
-    env_from: dict[str, str] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)  # plain values; secrets are stored encrypted in repo_secrets
     conventions: list[str] = Field(default_factory=list)
     rules: list[str] = Field(default_factory=list)
     notes: str = ""  # shown to the agent verbatim: seeded accounts, how to log in, known limits
     allow_forks: bool = False
 
-    @field_validator("env_from", mode="before")
-    @classmethod
-    def _list_means_same_name(cls, value):
-        if isinstance(value, list):
-            return {n: n for n in value}
-        return value or {}
-
-    @field_validator("env_from")
-    @classmethod
-    def _no_runner_credentials(cls, mapping: dict[str, str]) -> dict[str, str]:
-        bad = sorted(src for src in mapping.values() if src.upper() in RESERVED_ENV)
-        if bad:
-            raise ValueError(
-                f"env_from must not forward the runner's own credentials: {', '.join(bad)} "
-                "(store the repo's value under its own secret name, e.g. DATABASE_URL: MYREPO_DATABASE_URL)"
-            )
-        return mapping
-
 
 def load_repos(path: str | Path) -> dict[str, RepoConfig]:
+    """Reads the old repos.yaml format; only `python -m mogo.tools.import_repos` uses it."""
     data = yaml.safe_load(Path(path).read_text()) or {}
     repos = [RepoConfig(**r) for r in data.get("repos", [])]
     return {r.name.lower(): r for r in repos}

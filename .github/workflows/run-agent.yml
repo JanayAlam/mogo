@@ -5,10 +5,13 @@ on:
     inputs:
       run_id:
         description: mogo run id (row in the runs table)
-        required: true
+        required: false
+      profile_repo_id:
+        description: re-learn this repo's conventions instead of running a review
+        required: false
 
 concurrency:
-  group: mogo-${{ inputs.run_id }}
+  group: mogo-${{ inputs.run_id || inputs.profile_repo_id }}
 
 jobs:
   run:
@@ -34,13 +37,15 @@ jobs:
           S_DATABASE_URL: ${{ secrets.DATABASE_URL != '' }}
           S_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
           S_LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL != '' }}
+          S_MOGO_SECRET_KEY: ${{ secrets.MOGO_SECRET_KEY != '' }}
           V_AGENT_GITHUB_TOKEN: ${{ vars.AGENT_GITHUB_TOKEN != '' }}
           V_DATABASE_URL: ${{ vars.DATABASE_URL != '' }}
           V_DEEPSEEK_API_KEY: ${{ vars.DEEPSEEK_API_KEY != '' }}
           V_LOCAL_LLM_BASE_URL: ${{ vars.LOCAL_LLM_BASE_URL != '' }}
+          V_MOGO_SECRET_KEY: ${{ vars.MOGO_SECRET_KEY != '' }}
         run: |
           missing=0
-          for n in AGENT_GITHUB_TOKEN DATABASE_URL DEEPSEEK_API_KEY LOCAL_LLM_BASE_URL; do
+          for n in AGENT_GITHUB_TOKEN DATABASE_URL DEEPSEEK_API_KEY LOCAL_LLM_BASE_URL MOGO_SECRET_KEY; do
             s="S_$n"; v="V_$n"
             if [ "${!s}" = "true" ]; then echo "ok       secret $n"
             elif [ "${!v}" = "true" ]; then echo "::error::$n is under the Variables tab; move it to the Secrets tab"; missing=1
@@ -52,16 +57,17 @@ jobs:
         working-directory: backend
         env:
           RUN_ID: ${{ inputs.run_id }}
+          PROFILE_REPO_ID: ${{ inputs.profile_repo_id }}
           GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          # Decrypts repo secrets entered in the web app; same value as MOGO_SECRET_KEY on Vercel.
+          MOGO_SECRET_KEY: ${{ secrets.MOGO_SECRET_KEY }}
           # Optional: a tunnel URL (Tailscale / cloudflared) to your local LLM server.
           LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL }}
           LOCAL_LLM_MODEL: ${{ vars.LOCAL_LLM_MODEL || secrets.LOCAL_LLM_MODEL }}
-          # Every Actions secret, as JSON. The runner forwards only the names a repo lists under `env_from`
-          # in repos.yaml (test keys for the code under test). Add such secrets in Settings > Secrets.
-          MOGO_SECRETS_JSON: ${{ toJSON(secrets) }}
           ENVIRONMENT: actions
-          REPOS_FILE: ../repos.yaml
-        run: python -m mogo.runner "$RUN_ID"
+        run: |
+          if [ -n "$PROFILE_REPO_ID" ]; then python -m mogo.runner --profile "$PROFILE_REPO_ID"
+          else python -m mogo.runner "$RUN_ID"; fi

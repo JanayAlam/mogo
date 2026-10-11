@@ -31,11 +31,16 @@ export function checkPassword(input: string): boolean {
   return !!pw && safeEqual(input, pw);
 }
 
-/** Fails closed in production: without APP_PASSWORD nobody gets in. */
+/** No APP_PASSWORD means no login, except in production, which stays closed unless AUTH_DISABLED=true. */
+export function loginRequired(): boolean {
+  if (process.env.APP_PASSWORD) return true;
+  return process.env.NODE_ENV === "production" && process.env.AUTH_DISABLED !== "true";
+}
+
 export async function isAuthorized(
   cookieValue: string | undefined,
 ): Promise<boolean> {
   const pw = process.env.APP_PASSWORD;
-  if (!pw) return process.env.NODE_ENV !== "production";
+  if (!pw) return !loginRequired();
   return !!cookieValue && safeEqual(cookieValue, await sessionToken(pw));
 }

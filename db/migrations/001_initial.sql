@@ -1,4 +1,4 @@
--- Run once in the Supabase SQL editor. The Python runner's create_all() is a no-op when these exist.
+-- Initial tables: runs and their event log.
 create table if not exists runs (
   id          varchar(36) primary key default gen_random_uuid()::text,
   repo        varchar(200) not null,

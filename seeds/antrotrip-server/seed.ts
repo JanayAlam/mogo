@@ -2,7 +2,7 @@
  * mogo test fixtures for antrotrip-server.
  *
  * Copied into the checked-out repo root and run with that repo's own Prisma client, after
- * `prisma migrate deploy`, `pnpm bootstrap` and `pnpm seed` (see `prepare` in repos.yaml):
+ * `prisma migrate deploy`, `pnpm bootstrap` and `pnpm seed` (see `prepare` in the repo settings):
  *
  *   cp "$MOGO_SEEDS_DIR/antrotrip-server/seed.ts" ./mogo-seed.ts && pnpm exec tsx ./mogo-seed.ts
  *

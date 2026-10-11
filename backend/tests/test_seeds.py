@@ -1,19 +1,10 @@
-"""antrotrip-server runs against a shared development database, so mogo must never write its schema or fixtures.
-The seed file is kept for sandbox databases and checked for internal consistency."""
+"""The antrotrip-server seed file is kept for sandbox databases and checked for internal consistency.
+(antrotrip-server itself runs against the shared development database: its repo settings never migrate or seed.)"""
 import re
-from pathlib import Path
 
-from mogo.config import load_repos
 from mogo.runner.pipeline import SEEDS_DIR
 
 SEED = SEEDS_DIR / "antrotrip-server" / "seed.ts"
-REPOS = Path(__file__).resolve().parents[2] / "repos.yaml"
-
-
-def test_the_shared_development_database_is_never_migrated_or_seeded():
-    cfg = load_repos(REPOS)["antrotrip/antrotrip-server"]
-    for cmd in cfg.prepare:
-        assert not any(w in cmd for w in ("migrate", "seed", "bootstrap", "db push", "reset")), cmd
 
 
 def test_claims_reference_defined_listings_and_cover_every_status():

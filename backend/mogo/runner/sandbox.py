@@ -3,7 +3,6 @@ with a scrubbed environment: no GitHub token, no LLM keys, no DB credentials."""
 from __future__ import annotations
 
 import base64
-import json
 import logging
 import os
 import shutil
@@ -26,24 +25,6 @@ def scrubbed_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def resolve_repo_env(env: dict[str, str], env_from: dict[str, str]) -> tuple[dict[str, str], list[str]]:
-    """Plain `env` plus the `env_from` secrets ({sandbox name: secret name}). A secret is read from the process
-    environment, else from the JSON blob in MOGO_SECRETS_JSON (the Actions workflow passes toJSON(secrets)).
-    Secrets override `env`. Returns (env, missing secret names)."""
-    try:
-        blob = json.loads(os.environ.get("MOGO_SECRETS_JSON") or "{}")
-    except json.JSONDecodeError:
-        blob = {}
-    resolved, missing = dict(env), []
-    for name, secret in env_from.items():
-        value = os.environ.get(secret) or blob.get(secret)
-        if value:
-            resolved[name] = str(value)
-        else:
-            missing.append(secret)
-    return resolved, missing
-
-
 def run_cmd(cmd: str, cwd: Path, timeout: int = 600, env: dict[str, str] | None = None) -> tuple[int, str]:
     try:
         p = subprocess.run(
@@ -60,24 +41,43 @@ def tail(text: str, limit: int = 4000) -> str:
     return text if len(text) <= limit else "...[truncated]...\n" + text[-limit:]
 
 
-def checkout_pr(owner: str, repo: str, number: int, token: str, dest: Path) -> None:
-    """Fetch pull/N/head over HTTPS. The token goes in a one-off header, never into .git/config."""
+def _git(dest: Path, token: str, *args: str) -> None:
+    """The token goes in a one-off header, never into .git/config."""
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     auth = ["-c", f"http.extraheader=AUTHORIZATION: basic {basic}"]
+    p = subprocess.run(["git", *auth, *args], cwd=dest, capture_output=True, text=True, timeout=300)
+    if p.returncode:
+        raise RuntimeError(f"git {args[0]} failed: {p.stderr.replace(basic, '***')[:500]}")
+
+
+def _init(owner: str, repo: str, token: str, dest: Path) -> None:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    url = f"https://github.com/{owner}/{repo}.git"
+    _git(dest, token, "init", "-q")
+    _git(dest, token, "remote", "add", "origin", f"https://github.com/{owner}/{repo}.git")
 
-    def git(*args: str) -> None:
-        p = subprocess.run(["git", *auth, *args], cwd=dest, capture_output=True, text=True, timeout=300)
-        if p.returncode:
-            raise RuntimeError(f"git {args[0]} failed: {p.stderr.replace(basic, '***')[:500]}")
 
-    git("init", "-q")
-    git("remote", "add", "origin", url)
-    git("fetch", "-q", "--depth", "50", "origin", f"pull/{number}/head")
-    git("checkout", "-q", "FETCH_HEAD")
+def checkout_pr(owner: str, repo: str, number: int, token: str, dest: Path) -> None:
+    """Fetch pull/N/head over HTTPS."""
+    _init(owner, repo, token, dest)
+    _git(dest, token, "fetch", "-q", "--depth", "50", "origin", f"pull/{number}/head")
+    _git(dest, token, "checkout", "-q", "FETCH_HEAD")
+
+
+BASE_REF = "refs/mogo/base"
+
+
+def fetch_branch(root: Path, branch: str, token: str) -> str:
+    """Fetch the tip of `branch` into the PR checkout without touching its working tree. Returns the ref."""
+    _git(root, token, "fetch", "-q", "--depth", "1", "origin", f"+refs/heads/{branch}:{BASE_REF}")
+    return BASE_REF
+
+
+def checkout_branch(owner: str, repo: str, branch: str, token: str, dest: Path) -> None:
+    """Shallow clone of one branch (profile rebuilds outside a review)."""
+    _init(owner, repo, token, dest)
+    _git(dest, token, "fetch", "-q", "--depth", "1", "origin", f"+refs/heads/{branch}:{BASE_REF}")
 
 
 class AppProcess:

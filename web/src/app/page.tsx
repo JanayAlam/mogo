@@ -1,5 +1,5 @@
-import { Dashboard } from '@/components/dashboard'
+import { ProjectsView } from "@/components/projects-view";
 
 export default function Home() {
-  return <Dashboard />
+  return <ProjectsView />;
 }

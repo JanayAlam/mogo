@@ -6,7 +6,7 @@ import httpx
 from mogo.github.client import GitHubClient
 from mogo.models import Run
 from mogo.runner.pipeline import execute_run
-from conftest import FakeLLM, tool_call
+from conftest import FakeLLM, seed_repos, tool_call
 
 DIFF = """diff --git a/src/svc.ts b/src/svc.ts
 --- a/src/svc.ts
@@ -16,11 +16,14 @@ DIFF = """diff --git a/src/svc.ts b/src/svc.ts
 +db.raw('select 1')
  export {}
 """
+MAIN_SHA = "a1b2c3d4e5f6"
 PR = {"title": "Add thing", "body": "", "head": {"sha": "abc", "repo": {"full_name": "acme/api"}}}
 
 
 def fake_github(posted, fail_inline=False):
     def handler(req: httpx.Request):
+        if req.method == "GET" and req.headers.get("accept", "").endswith(".sha"):
+            return httpx.Response(200, text=MAIN_SHA)
         if req.method == "GET" and "diff" in req.headers.get("accept", ""):
             return httpx.Response(200, text=DIFF)
         if req.method == "GET":
@@ -61,7 +64,7 @@ REPORT = {
 def run(settings, repos, sf, gh, run_id):
     llm = FakeLLM([[tool_call("read_file", {"path": "src/svc.ts"})], [tool_call("submit_report", REPORT, "c2")]])
     settings.llm_mode = "deepseek"
-    execute_run(run_id, settings, repos, sf, gh=gh, llm_factory=lambda _c: llm, checkout=fake_checkout)
+    execute_run(run_id, settings, sf, gh=gh, llm_factory=lambda _c: llm, checkout=fake_checkout)
 
 
 def test_full_run_posts_inline_and_general(settings, repos, sf):
@@ -98,7 +101,7 @@ def test_inline_rejection_falls_back_to_summary(settings, repos, sf):
 
 def test_unconfigured_repo_fails_cleanly(settings, sf):
     rid = make_run(sf, llm_mode="deepseek")
-    execute_run(rid, settings, {}, sf, gh=fake_github([]), checkout=fake_checkout)
+    execute_run(rid, settings, sf, gh=fake_github([]), checkout=fake_checkout)
     with sf() as s:
         r = s.get(Run, rid)
         assert r.status == "failed" and "not configured" in r.error
@@ -108,7 +111,7 @@ def test_fork_pr_is_refused(settings, repos, sf, monkeypatch):
     rid = make_run(sf, llm_mode="deepseek")
     gh = fake_github([])
     monkeypatch.setitem(PR["head"], "repo", {"full_name": "evil/api"})
-    execute_run(rid, settings, repos, sf, gh=gh, checkout=fake_checkout)
+    execute_run(rid, settings, sf, gh=gh, checkout=fake_checkout)
     with sf() as s:
         assert "fork" in s.get(Run, rid).error
 
@@ -120,10 +123,11 @@ def test_services_are_started_and_stopped_around_the_run(settings, sf, tmp_path)
         name="acme/api", services_cmd=f"touch {tmp_path}/up", services_down=f"touch {tmp_path}/down",
         start="python3 -m http.server 8765", healthcheck="http://localhost:8765",
     )}
+    seed_repos(sf, cfg)
     rid = make_run(sf, feature="thing works", llm_mode="deepseek")
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
     settings.llm_mode = "deepseek"
-    execute_run(rid, settings, cfg, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     assert (tmp_path / "up").exists() and (tmp_path / "down").exists()
     with sf() as s:
         assert s.get(Run, rid).status == "succeeded"
@@ -145,9 +149,10 @@ def _boot_cfg(tmp_path, **kw):
 
 
 def _run_feature(settings, cfg, sf, llm):
+    seed_repos(sf, cfg)
     rid = make_run(sf, feature="thing works", llm_mode="deepseek")
     settings.llm_mode = "deepseek"
-    execute_run(rid, settings, cfg, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     return rid
 
 

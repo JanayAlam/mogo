@@ -4,6 +4,7 @@ from mogo.agent.schemas import AgentReport, Finding, GateResult
 from mogo.github.diffmap import commentable_lines
 
 _ICON = {"pass": "✅", "fail": "❌", "unverified": "⚠️"}
+_CHECK_ICON = {"pass": "✅", "fail": "❌", "skipped": "➖"}
 _SEV = {"blocker": "🛑 blocker", "major": "🔴 major", "minor": "🟡 minor", "nit": "⚪ nit"}
 
 
@@ -36,6 +37,10 @@ def render_summary(report: AgentReport, gates: list[GateResult], general: list[F
         for c in report.criteria:
             ev = c.evidence.replace("\n", " ").replace("|", "\\|")[:300]
             parts.append(f"| {_ICON[c.status]} | {c.text.replace('|', '/')} | {ev} |")
+        parts.append("")
+    if report.checks:
+        parts += ["### Built-in checks"]
+        parts += [f"- {_CHECK_ICON[c.status]} `{c.id}`" + (f": {c.note}" if c.note else "") for c in report.checks]
         parts.append("")
     if gates:
         parts += ["### Gates"] + [f"- {'✅' if g.ok else '❌'} `{g.cmd}`" for g in gates] + [""]

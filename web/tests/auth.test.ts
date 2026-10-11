@@ -21,6 +21,14 @@ describe('isAuthorized', () => {
     vi.stubEnv('NODE_ENV', 'development')
     expect(await isAuthorized(undefined)).toBe(true)
   })
+  it('opens production without a password only when AUTH_DISABLED=true', async () => {
+    vi.stubEnv('APP_PASSWORD', '')
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('AUTH_DISABLED', 'true')
+    expect(await isAuthorized(undefined)).toBe(true)
+    vi.stubEnv('APP_PASSWORD', 'hunter2')
+    expect(await isAuthorized(undefined)).toBe(false)
+  })
 })
 
 describe('login route', () => {
@@ -42,6 +50,11 @@ describe('login route', () => {
 })
 
 describe('proxy', () => {
+  it('skips the login page when no password is needed', async () => {
+    vi.stubEnv('APP_PASSWORD', '')
+    vi.stubEnv('NODE_ENV', 'development')
+    expect((await proxy(new NextRequest('http://x/login'))).headers.get('location')).toBe('http://x/')
+  })
   it('blocks the API with 401 and redirects pages to /login', async () => {
     vi.stubEnv('APP_PASSWORD', 'hunter2')
     expect((await proxy(new NextRequest('http://x/api/runs'))).status).toBe(401)

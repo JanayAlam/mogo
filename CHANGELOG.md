@@ -8,9 +8,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
-- `env_from` per repo: pass secrets stored in the runner repo's Actions secrets to the sandbox without committing them. The runner's own credentials are refused.
-  Entries can map a variable to a differently named secret (`DATABASE_URL: ANTROTRIP_SERVER_DATABASE_URL`).
-- antrotrip-server: secrets come from `ANTROTRIP_SERVER_*` and Postgres is the shared development database (no `mogo-pg`
+- Projects: group repos into a project, give each repo a free-text role (`backend`, `frontend`, `admin-frontend`, ...)
+  and a source of truth branch. Repo settings (commands, env, conventions, notes) are edited in the web app
+  and stored in Postgres (`projects`, `repos`, `repo_profiles`, `features`, `feature_repos`; `db/migrations/002_projects.sql`).
+- Features: a description plus one PR and optional requirements per repo. One run per repo, started together or one by one.
+  The agent sees the project description, the repo's role, its requirements, and the feature's other repos.
+- Per-repo secrets in the web app (`repo_secrets`, migration 003): encrypted with AES-256-GCM (`MOGO_SECRET_KEY`, shared by
+  the web app and the runner), bound to repo and name, write-only in the UI. They override `env`. The
+  runner masks secret values in the run log, stored result, posted review, and everything sent to the LLM.
+- Import a .env file into a repo's secrets (repo page): existing names replaced, new names added, others kept, with a
+  names-only preview. `POST /api/repos/:id/secrets` with `{content}`.
+- `DATABASE_URL` may contain a raw `@` in the password and Prisma-only options (`connection_limit`, `pgbouncer`, ...);
+  both apps normalise it.
+- `python -m mogo.tools.migrate` applies `db/migrations/*.sql` once each (tracked in `schema_migrations`, `--status`
+  to list). `db/schema.sql` is replaced by `001_initial.sql`; the runner refuses to start while a migration is pending,
+  and no longer creates tables itself on Postgres (that skipped row level security).
+- `python -m mogo.tools.import_repos FILE --project NAME` copies settings in the old repos.yaml format into a project.
+- Built-in checks on every review, switchable per project: `no-duplicate-types` (within one repo and language) and
+  `structure-convention` (file names, role suffixes, test placement, new top-level folders). Candidates come from a
+  repo profile learned from the source of truth branch (cached per commit in `repo_profiles`); the agent confirms them
+  and reports a pass/fail per check (`checks` in the report, a "Built-in checks" section in the review).
+- "Re-learn now" on the repo page and `python -m mogo.runner --profile <repo id>`; the workflow takes `profile_repo_id`.
+- Web app redesigned after the Lovable "PR Genius Dashboard" design: projects dashboard, project page, repo settings,
+  feature form and feature page with criteria, findings, gates and the live log.
+- `AUTH_DISABLED=true` opens a production deployment that has no `APP_PASSWORD`.
+- antrotrip-server: Postgres is the shared development database (no `mogo-pg`
   container). mogo no longer migrates or seeds it; `prepare` only runs `prisma generate`.
 - Seed fixtures for antrotrip-server (`seeds/antrotrip-server/seed.ts`): users in every login state, businesses in every verification state,
   listings in every claim/review state, restaurant menus and two trips, with known OTPs armed in Valkey.
@@ -20,6 +42,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- The runner reads repo settings from the database; `repos.yaml` (removed), `REPOS_FILE` and the web `ALLOWED_REPOS` allow-list are gone.
+  `POST /api/runs` is replaced by `POST /api/features/:id/runs` and `POST /api/runs/:id/rerun`.
+- Without `APP_PASSWORD` there is no login screen outside production.
+- A repo's environment comes only from its settings (env and secrets). `env_from` is removed and the workflow no longer
+  hands the runner every Actions secret (`MOGO_SECRETS_JSON`): runner secrets are for the runner. Runs and the repo page
+  list leftover `env_from` names to re-enter as secrets.
 - Agent loop accepts tool calls that local models write as JSON text (`{"name": ..., "arguments": ...}`, fenced or in
   `<tool_call>`), and nudges up to 3 times before failing; the failure now quotes the model's last reply.
 - Run log shows the output of failing gates and the app's output when it does not become healthy.

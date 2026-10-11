@@ -49,6 +49,12 @@ class GitHubClient:
         )
         return r.text
 
+    def branch_sha(self, owner: str, repo: str, branch: str) -> str:
+        r = self._req(
+            "GET", f"/repos/{owner}/{repo}/commits/{branch}", headers={"Accept": "application/vnd.github.sha"},
+        )
+        return r.text.strip()
+
     def create_review(
         self, owner: str, repo: str, number: int, *, body: str, event: str,
         comments: list[dict], commit_id: str | None = None,

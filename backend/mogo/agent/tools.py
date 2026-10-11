@@ -46,15 +46,20 @@ TOOL_SPECS = [
                 "path": {"type": "string"}, "line": {"type": "integer"},
                 "severity": {"type": "string", "enum": ["blocker", "major", "minor", "nit"]},
                 "message": {"type": "string"}, "rule": {"type": "string"}},
-                "required": ["path", "line", "severity", "message"]}}},
+                "required": ["path", "line", "severity", "message"]}},
+            "checks": {"type": "array", "description": "One entry per built-in check listed in the prompt.",
+                       "items": {"type": "object", "properties": {
+                           "id": {"type": "string"}, "status": {"type": "string", "enum": ["pass", "fail", "skipped"]},
+                           "note": {"type": "string"}}, "required": ["id", "status"]}}},
             "required": ["summary"]}}},
 ]
 
 
 class ToolBox:
-    def __init__(self, root: Path, env: dict[str, str] | None = None):
+    def __init__(self, root: Path, env: dict[str, str] | None = None, redact=None):
         self.root = root.resolve()
         self.env = env or {}
+        self.redact = redact or (lambda text: text)  # tool output goes to the LLM provider: mask secret values
         self.report: AgentReport | None = None
 
     def _safe(self, rel: str) -> Path:
@@ -64,6 +69,9 @@ class ToolBox:
         return p
 
     def call(self, name: str, args: dict) -> str:
+        return self.redact(self._call(name, args))
+
+    def _call(self, name: str, args: dict) -> str:
         try:
             fn = getattr(self, f"_t_{name}", None)
             if fn is None:

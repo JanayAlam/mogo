@@ -1,8 +1,11 @@
-// Runs against a real Postgres only when TEST_DATABASE_URL is set (schema from ../db/schema.sql applied).
+// Runs against a real Postgres only when TEST_DATABASE_URL is set (migrated with python -m mogo.tools.migrate).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { sql } from '@/lib/db'
-import { getRun, insertRun, listRuns, markRunFailed } from '@/lib/runs'
+import { deleteFeature, FeatureInputError, getFeature, insertFeature, listFeatures, updateFeature } from '@/lib/features'
+import { deleteProject, getProject, getRepo, insertProject, insertRepo, listProjects, updateRepo } from '@/lib/projects'
+import { getRun, getStats, insertRun, listRuns, markRunFailed } from '@/lib/runs'
+import { deleteSecret, importSecrets, listSecrets, setSecret } from '@/lib/secrets'
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)('runs queries (postgres)', () => {
   beforeAll(() => {
@@ -14,7 +17,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('runs queries (postgres)', () =>
 
   it('inserts, lists, reads with events, and marks failed', async () => {
     const run = await insertRun({
-      repo: 'acme/api', pr_url: 'https://github.com/acme/api/pull/1', pr_number: 1,
+      feature_repo_id: null, repo: 'acme/api', pr_url: 'https://github.com/acme/api/pull/1', pr_number: 1,
       feature: 'f', llm_mode: 'auto', dry_run: false,
     })
     expect(run.status).toBe('queued')
@@ -25,5 +28,69 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('runs queries (postgres)', () =>
     const got = await getRun(run.id)
     expect(got).toMatchObject({ status: 'failed', error: 'boom', events: [{ message: 'hello' }] })
     expect(await getRun('00000000-0000-0000-0000-000000000000')).toBeNull()
+  })
+
+  it('projects, repos and features with their latest runs', async () => {
+    const { id: pid } = await insertProject({ name: 'Integration', description: 'd' })
+    const api = (await insertRepo(pid, { full_name: 'acme/api', role: 'backend', default_branch: 'main', config: { gates: ['x'] } }))!
+    const web = (await insertRepo(pid, { full_name: 'acme/web', role: 'frontend', default_branch: 'main', config: {} }))!
+    await expect(insertRepo(pid, { full_name: 'acme/api', role: '', default_branch: 'main', config: {} })).rejects.toThrow('duplicate')
+    expect(await insertRepo('00000000-0000-0000-0000-000000000000', { full_name: 'a/b', role: '', default_branch: 'main', config: {} })).toBeNull()
+    await updateRepo(api.id, { config: { gates: ['pnpm lint'] } })
+    process.env.MOGO_SECRET_KEY = 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc='
+    await setSecret(api.id, 'API_KEY', 'plain-secret-1')
+    await setSecret(api.id, 'API_KEY', 'plain-secret-2')
+    const [stored] = await sql()`select value_enc from repo_secrets where repo_id = ${api.id}`
+    expect(stored.value_enc.startsWith('v1:') && !stored.value_enc.includes('plain-secret')).toBe(true)
+    expect((await listSecrets(api.id)).map((x) => x.name)).toEqual(['API_KEY'])
+    expect(await listSecrets(web.id)).toEqual([])
+    expect(await deleteSecret(web.id, 'API_KEY')).toBe(false)
+    // .env import: API_KEY replaced, NEW added, OLD_ONLY (not in the file) kept
+    await setSecret(api.id, 'OLD_ONLY', 'keep-me')
+    const [encBefore] = await sql()`select value_enc from repo_secrets where repo_id = ${api.id} and name = 'API_KEY'`
+    expect(await importSecrets(api.id, [{ name: 'API_KEY', value: 'v3' }, { name: 'NEW', value: 'n' }])).toEqual({
+      added: ['NEW'], replaced: ['API_KEY'],
+    })
+    const [encAfter] = await sql()`select value_enc from repo_secrets where repo_id = ${api.id} and name = 'API_KEY'`
+    expect(encAfter.value_enc).not.toBe(encBefore.value_enc)
+    expect((await listSecrets(api.id)).map((x) => x.name)).toEqual(['API_KEY', 'NEW', 'OLD_ONLY'])
+    await sql()`insert into repo_profiles (repo_id, main_sha, structure, type_index, summary)
+      values (${api.id}, 'abc1234', ${sql().json({ files: 12 } as never)}::json, ${sql().json([{ name: 'A' }] as never)}::json, 'conv')`
+    expect((await getRepo(api.id))!.profile).toMatchObject({ main_sha: 'abc1234', files: 12, types: 1, summary: 'conv', error: '' })
+    expect((await getProject(pid))!.repos.find((r) => r.id === api.id)!.profile).toMatchObject({ files: 12, types: 1 })
+    expect((await getProject(pid))!.repos.map((r) => [r.full_name, r.config.gates ?? []])).toEqual([
+      ['acme/api', ['pnpm lint']], ['acme/web', []],
+    ])
+
+    await expect(insertFeature(pid, {
+      title: 'T', description: 'd', repos: [{ repo_id: api.id, pr_url: 'https://github.com/acme/web/pull/1', requirements: '' }],
+    })).rejects.toThrow(FeatureInputError)
+    const { id: fid } = (await insertFeature(pid, {
+      title: 'Refunds', description: 'refund', repos: [
+        { repo_id: api.id, pr_url: 'https://github.com/acme/api/pull/4', requirements: 'idempotent' },
+        { repo_id: web.id, pr_url: 'https://github.com/acme/web/pull/9', requirements: '' },
+      ],
+    }))!
+    const f = (await getFeature(fid))!
+    expect(f.state).toBe('idle')
+    const frApi = f.repos.find((r) => r.repo_id === api.id)!
+    expect([frApi.pr_number, frApi.requirements, frApi.role]).toEqual([4, 'idempotent', 'backend'])
+
+    const run = await insertRun({
+      feature_repo_id: frApi.id, repo: 'acme/api', pr_url: frApi.pr_url, pr_number: 4, feature: 'refund', llm_mode: 'auto', dry_run: false,
+    })
+    expect((await listFeatures(pid))[0]).toMatchObject({ id: fid, state: 'queued' })
+    expect((await getStats()).queued).toBeGreaterThan(0)
+    expect((await listProjects()).find((p) => p.id === pid)).toMatchObject({ feature_count: 1, run_count: 1, latest_status: 'queued' })
+
+    // web dropped: its row goes, the api row (and its run) stays
+    await updateFeature(fid, { repos: [{ repo_id: api.id, pr_url: 'https://github.com/acme/api/pull/5', requirements: 'x' }] })
+    const after = (await getFeature(fid))!
+    expect(after.repos.map((r) => [r.id, r.pr_number])).toEqual([[frApi.id, 5]])
+    expect(after.repos[0].latest_run?.id).toBe(run.id)
+
+    expect(await deleteFeature(fid)).toBe(true)
+    expect(await getRun(run.id)).toBeNull()
+    expect(await deleteProject(pid)).toBe(true)
   })
 })

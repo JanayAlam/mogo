@@ -13,13 +13,18 @@ from mogo.agent.loop import run_agent
 from mogo.agent.prompts import SYSTEM, build_user_prompt
 from mogo.agent.schemas import GateResult
 from mogo.agent.tools import ToolBox
+from mogo.checks import CheckContext, CheckOutcome, enabled_checks, render_section, run_checks
 from mogo.config import RepoConfig, Settings
+from mogo.context import ContextError, RunContext, load_context
 from mogo.github.client import GitHubClient, GitHubError, parse_pr_url
 from mogo.llm.provider import make_client, resolve_llm
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
+from mogo.profile.build import GitTree, Tree
+from mogo.profile.store import ensure_profile, save_profile_error
 from mogo.runner import sandbox
 from mogo.runner.review import render_summary, split_findings, verdict
+from mogo.secrets import Redactor, decrypt_all
 
 log = logging.getLogger(__name__)
 
@@ -33,8 +38,10 @@ class _Recorder:
 
     def __init__(self, sf: sessionmaker, run_id: str):
         self.sf, self.run_id = sf, run_id
+        self.redact = Redactor()  # replaced once the repo's secrets are known
 
     def __call__(self, msg: str, level: str = "info") -> None:
+        msg = self.redact(msg)
         getattr(log, level if level != "warn" else "warning")(msg)
         with self.sf() as s:
             s.add(RunEvent(run_id=self.run_id, level=level, message=msg[:2000]))
@@ -44,7 +51,7 @@ class _Recorder:
         with self.sf() as s:
             run = s.get(Run, self.run_id)
             for k, v in fields.items():
-                setattr(run, k, v)
+                setattr(run, k, self.redact.deep(v))
             s.commit()
 
 
@@ -61,9 +68,40 @@ def _read_conventions(root: Path, names: list[str]) -> str:
     return "\n\n".join(chunks)
 
 
+def git_base_tree(root: Path, branch: str, token: str) -> Tree:
+    """The source of truth branch, fetched into the PR checkout as a separate ref."""
+    return GitTree(root, sandbox.fetch_branch(root, branch, token))
+
+
+def _builtin_checks(
+    rec: _Recorder, sf: sessionmaker, ctx: RunContext, gh: GitHubClient, root: Path, diff: str,
+    owner: str, repo: str, token: str, base_tree,
+) -> str:
+    """Learns (or reuses) the branch profile, runs the enabled checks, returns the prompt section."""
+    checks = enabled_checks(ctx.project_settings)
+    if not checks:
+        return ""
+    branch = ctx.default_branch
+    try:
+        head = gh.branch_sha(owner, repo, branch)
+        profile, reused = ensure_profile(sf, ctx.repo_id, branch, head, lambda: base_tree(root, branch, token))
+    except Exception as e:  # noqa: BLE001 - the review goes on without learned conventions
+        msg = f"could not learn conventions from `{branch}`: {e}"
+        rec(msg, "warn")
+        save_profile_error(sf, ctx.repo_id, msg)
+        return render_section([CheckOutcome(c, error=msg) for c in checks], None)
+    rec(f"conventions {'reused' if reused else 'learned'} from {branch} @ {head[:7]}: "
+        f"{profile.structure.get('files', 0)} files, {len(profile.type_index)} types")
+    outcomes = run_checks(checks, CheckContext(root=root, diff=diff, profile=profile))
+    rec("built-in checks: " + ", ".join(
+        f"{o.check.id} " + (f"error ({o.error})" if o.error else f"{len(o.candidates)} candidates") for o in outcomes
+    ))
+    return render_section(outcomes, profile)
+
+
 def execute_run(
-    run_id: str, settings: Settings, repos: dict[str, RepoConfig], sf: sessionmaker,
-    gh: GitHubClient | None = None, llm_factory=None, checkout=sandbox.checkout_pr,
+    run_id: str, settings: Settings, sf: sessionmaker,
+    gh: GitHubClient | None = None, llm_factory=None, checkout=sandbox.checkout_pr, base_tree=git_base_tree,
 ) -> None:
     set_run_context(run_id)
     rec = _Recorder(sf, run_id)
@@ -75,22 +113,34 @@ def execute_run(
     try:
         with sf() as s:
             run = s.get(Run, run_id)
-            pr_url, feature, mode, dry = run.pr_url, run.feature, run.llm_mode, run.dry_run
+            pr_url, mode, dry = run.pr_url, run.llm_mode, run.dry_run
         rec.update(status="running")
 
         owner, repo_name, number = parse_pr_url(pr_url)
-        cfg = repos.get(f"{owner}/{repo_name}".lower())
-        if cfg is None:
-            raise RunFailed(f"{owner}/{repo_name} is not configured in repos.yaml")
+        try:
+            ctx = load_context(sf, run_id)
+        except ContextError as e:
+            raise RunFailed(str(e)) from e
+        cfg, feature = ctx.cfg, ctx.feature
+        if cfg.name.lower() != f"{owner}/{repo_name}".lower():
+            raise RunFailed(f"PR belongs to {owner}/{repo_name}, but the feature lists it under {cfg.name}")
 
-        repo_env, missing_env = sandbox.resolve_repo_env(cfg.env, cfg.env_from)
-        if missing_env:
-            rec(f"env_from secrets not set (features needing them will fail): {', '.join(missing_env)}", "warn")
+        # The repo's commands see only its own env and secrets; the runner's credentials stay out (sandbox.scrubbed_env).
+        if ctx.legacy_env_from:
+            rec("env_from is no longer read (runner secrets are for the runner only); add these under Secrets on "
+                f"the repo page: {', '.join(ctx.legacy_env_from)}", "warn")
+        stored, secret_problems = decrypt_all(settings.mogo_secret_key, ctx.repo_id, ctx.secrets)
+        for problem in secret_problems:
+            rec(f"repo secret unavailable: {problem}", "warn")
+        repo_env = {**cfg.env, **stored}  # a secret wins over a plain env value of the same name
+        rec.redact = Redactor(stored.values())
+        if stored:
+            rec(f"repo secrets: {', '.join(sorted(stored))}")
 
         pr = gh.get_pr(owner, repo_name, number)
         head_repo = (pr.get("head", {}).get("repo") or {}).get("full_name", "").lower()
         if head_repo != f"{owner}/{repo_name}".lower() and not cfg.allow_forks:
-            raise RunFailed("PR comes from a fork; set allow_forks: true in repos.yaml to run it")
+            raise RunFailed("PR comes from a fork; enable allow_forks in the repo settings to run it")
         diff = gh.get_diff(owner, repo_name, number)
         rec(f"PR #{number} '{pr['title']}': {len(diff)} bytes of diff")
 
@@ -101,6 +151,7 @@ def execute_run(
         root = workdir / "repo"
         checkout(owner, repo_name, number, settings.github_token, root)
         rec("checked out PR branch")
+        builtin = _builtin_checks(rec, sf, ctx, gh, root, diff, owner, repo_name, settings.github_token, base_tree)
 
         for cmd in cfg.setup:
             code, out = sandbox.run_cmd(cmd, root, env=repo_env)
@@ -148,14 +199,15 @@ def execute_run(
         user = build_user_prompt(
             title=pr["title"], body=pr.get("body") or "", feature=feature, diff=diff,
             conventions=_read_conventions(root, cfg.conventions), rules=cfg.rules,
-            gates=gates, app_status=app_status, notes=cfg.notes,
+            gates=gates, app_status=app_status, notes=cfg.notes, project=ctx, builtin=builtin,
         )
         client = (llm_factory or make_client)(choice)
-        report = run_agent(client, choice.model, SYSTEM, user, ToolBox(root, cmd_env), settings.max_agent_steps)
+        report = run_agent(client, choice.model, SYSTEM, rec.redact(user), ToolBox(root, cmd_env, rec.redact), settings.max_agent_steps)
         rec(f"agent done: {len(report.criteria)} criteria, {len(report.findings)} findings")
 
         inline, general = split_findings(report.findings, diff)
-        body = render_summary(report, gates, general, choice.label)
+        body = rec.redact(render_summary(report, gates, general, choice.label))
+        inline = rec.redact.deep(inline)
         v = verdict(report, gates)
         review_url = ""
         if dry:
