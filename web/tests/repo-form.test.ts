@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { applySuggestions, configToForm, formError, formToConfig, legacyEnvFrom } from '@/lib/repo-form'
 
-// antrotrip-server as imported from the old repos.yaml
+// a backend repo as imported from the old repos.yaml
 const OLD = {
   setup: ['corepack enable', 'pnpm install --frozen-lockfile'],
   gates: ['pnpm lint', 'pnpm format:check'],

@@ -1,14 +1,15 @@
 import * as Sentry from '@sentry/nextjs'
 import { NextResponse } from 'next/server'
 
+import { authed } from '@/lib/auth'
 import { dispatchWorkflow } from '@/lib/github'
 import { fail, type IdParams, notFound } from '@/lib/http'
 import { logger } from '@/lib/log'
 import { getRepo } from '@/lib/projects'
 
 /** Re-learn the repo's conventions from its source of truth branch (runs as a workflow job). */
-export async function POST(_req: Request, { params }: IdParams) {
-  const repo = await getRepo((await params).id)
+export const POST = authed(async (user, _req, { params }: IdParams) => {
+  const repo = await getRepo((await params).id, user.id)
   if (!repo) return notFound('repo')
   try {
     await dispatchWorkflow({ profile_repo_id: repo.id })
@@ -20,4 +21,4 @@ export async function POST(_req: Request, { params }: IdParams) {
   }
   logger.info('profile rebuild dispatched', { repo_id: repo.id, repo: repo.full_name })
   return NextResponse.json({ ok: true }, { status: 202 })
-}
+})

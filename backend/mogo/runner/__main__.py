@@ -1,7 +1,7 @@
 """Two ways in:
 
   python -m mogo.runner <run_id>            run a row the web app created (GitHub Actions uses this)
-  python -m mogo.runner --pr URL [options]  create a run and execute it here (local LLM, debugging)
+  python -m mogo.runner --pr URL [options]  create a run and execute it here (debugging; the project owner's LLM)
   python -m mogo.runner --profile REPO_ID   re-learn a repo's conventions from its source of truth branch
 """
 from __future__ import annotations
@@ -23,7 +23,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("run_id", nargs="?", help="existing run id")
     ap.add_argument("--pr", help="PR url (creates a new run)")
     ap.add_argument("--feature", default="", help="expected feature description")
-    ap.add_argument("--llm", default="auto", choices=["auto", "local", "deepseek"])
     ap.add_argument("--dry-run", action="store_true", help="do not post the review")
     ap.add_argument("--profile", metavar="REPO_ID", help="re-learn a repo's conventions and exit")
     args = ap.parse_args(argv)
@@ -47,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"learned {p.branch} @ {p.main_sha[:7]}: {p.structure.get('files', 0)} files, {len(p.type_index)} types")
         return 0
     try:
-        run_id = args.run_id or create_run(sf, args.pr, args.feature, args.llm, args.dry_run)
+        run_id = args.run_id or create_run(sf, args.pr, args.feature, args.dry_run)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

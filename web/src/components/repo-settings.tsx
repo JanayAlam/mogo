@@ -229,6 +229,16 @@ function RepoForm({
         </div>
       </div>
       <ErrorText error={del.error} />
+      {repo.installation_id === null && (
+        <p className="mb-6 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
+          The Mogo GitHub App no longer covers this repo, so runs cannot read it or post reviews.{" "}
+          <a
+            className="underline underline-offset-2"
+            href={`/api/auth/github/install?next=${encodeURIComponent(`/projects/${projectId}/repos/${repo.id}`)}`}>
+            Install Mogo on {repo.full_name}
+          </a>
+        </p>
+      )}
       {legacy.length > 0 && (
         <p className="mb-6 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
           This repo still lists GitHub Actions secret names (env_from), which

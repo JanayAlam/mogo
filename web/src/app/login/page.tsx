@@ -1,34 +1,13 @@
-"use client";
-
-import { useRouter } from "nextjs-toploader/app";
-import { useState } from "react";
+import { LogIn } from "lucide-react";
+import { Suspense } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { ErrorText, errorMessage, Field } from "@/components/ui-kit";
-import { api } from "@/lib/client";
+import { ErrorText } from "@/components/ui-kit";
 
-export default function LoginPage() {
-  const router = useRouter();
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+const START = "/api/auth/github/login";
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setError("");
-    setBusy(true);
-    try {
-      await api.login(password);
-      router.replace("/");
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
+export default function LoginPage({ searchParams }: PageProps<"/login">) {
   return (
     <main className="mx-auto mt-32 max-w-sm px-6">
       <Card>
@@ -37,27 +16,39 @@ export default function LoginPage() {
             mogo
           </span>
           <CardTitle className="pt-3 text-xl">Sign in</CardTitle>
-          <CardDescription>Enter the dashboard password.</CardDescription>
+          <CardDescription>
+            New here? Signing in creates your account. Mogo reviews pull requests on the repos where you install
+            its GitHub App.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={submit} className="space-y-4">
-            <Field label="Password" htmlFor="password">
-              <Input
-                id="password"
-                type="password"
-                autoFocus
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </Field>
-            <ErrorText error={error} />
-            <Button type="submit" className="w-full" loading={busy}>
-              Sign in
-            </Button>
-          </form>
+        <CardContent className="space-y-4">
+          <Suspense fallback={<SignInButton href={START} />}>
+            <SignIn searchParams={searchParams} />
+          </Suspense>
         </CardContent>
       </Card>
     </main>
+  );
+}
+
+/** The query (?error from a failed sign-in, ?next to return to) is request data, so it renders inside Suspense. */
+async function SignIn({ searchParams }: { searchParams: PageProps<"/login">["searchParams"] }) {
+  const { error, next } = await searchParams;
+  return (
+    <>
+      <ErrorText error={typeof error === "string" ? error : ""} />
+      <SignInButton href={typeof next === "string" ? `${START}?next=${encodeURIComponent(next)}` : START} />
+    </>
+  );
+}
+
+function SignInButton({ href }: { href: string }) {
+  return (
+    <Button asChild className="w-full">
+      {/* a plain link: the sign-in is a full-page round trip through GitHub */}
+      <a href={href}>
+        <LogIn /> Continue with GitHub
+      </a>
+    </Button>
   );
 }

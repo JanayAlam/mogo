@@ -1,8 +1,7 @@
-import type postgres from 'postgres'
-
-import { sql } from '@/lib/db'
+import { Prisma } from '@/generated/prisma/client'
+import { db } from '@/lib/db'
 import { parsePrUrl } from '@/lib/github'
-import type { RunRow } from '@/lib/runs'
+import { RUN_FIELDS, type RunRow, toRunRow } from '@/lib/runs'
 import { featureState, type ReviewState } from '@/lib/status'
 
 export interface FeatureRepoRow {
@@ -43,50 +42,52 @@ export interface FeatureInput {
 /** Bad input that only the database can detect (repo not in the project, PR of another repo). */
 export class FeatureInputError extends Error {}
 
-const RUN_COLUMNS = `x.id, x.feature_repo_id, x.repo, x.pr_url, x.pr_number, x.feature, x.llm_mode, x.dry_run, x.status,
-  x.llm_used, x.verdict, x.review_url, x.error, x.created_at, x.updated_at`
+const FEATURE_FIELDS = {
+  id: true, project_id: true, title: true, description: true, created_at: true, updated_at: true,
+  repos: {
+    orderBy: { repo: { created_at: 'asc' } },
+    select: {
+      id: true, feature_id: true, repo_id: true, pr_url: true, pr_number: true, requirements: true,
+      repo: { select: { full_name: true, role: true } },
+      runs: { orderBy: { created_at: 'desc' }, take: 1, select: RUN_FIELDS },
+    },
+  },
+} satisfies Prisma.FeatureSelect
 
-async function featureRepos(db: postgres.Sql, featureIds: string[]): Promise<FeatureRepoRow[]> {
-  if (featureIds.length === 0) return []
-  const rows = await db`
-    select fr.id, fr.feature_id, fr.repo_id, r.full_name, r.role, fr.pr_url, fr.pr_number, fr.requirements,
-      (select row_to_json(l) from (select ${db.unsafe(RUN_COLUMNS)} from runs x where x.feature_repo_id = fr.id
-        order by x.created_at desc limit 1) l) as latest_run
-    from feature_repos fr join repos r on r.id = fr.repo_id
-    where fr.feature_id in ${db(featureIds)}
-    order by r.created_at`
-  return rows as unknown as FeatureRepoRow[]
+function toFeatureRow(f: Prisma.FeatureGetPayload<{ select: typeof FEATURE_FIELDS }>): FeatureRow {
+  const repos = f.repos.map(({ repo, runs, ...fr }) => ({
+    ...fr,
+    full_name: repo.full_name,
+    role: repo.role,
+    latest_run: runs[0] ? toRunRow(runs[0]) : null,
+  }))
+  return {
+    ...f,
+    created_at: f.created_at.toISOString(),
+    updated_at: f.updated_at.toISOString(),
+    repos,
+    state: featureState(repos.map((r) => r.latest_run)),
+  }
 }
 
-function assemble(features: Omit<FeatureRow, 'repos' | 'state'>[], repos: FeatureRepoRow[]): FeatureRow[] {
-  return features.map((f) => {
-    const mine = repos.filter((r) => r.feature_id === f.id)
-    return { ...f, repos: mine, state: featureState(mine.map((r) => r.latest_run)) }
+/** Like lib/projects.ts, every function only sees features of the given owner's projects. */
+const owned = (ownerId: string): Prisma.FeatureWhereInput => ({ project: { owner_id: ownerId } })
+
+export async function listFeatures(projectId: string, ownerId: string): Promise<FeatureRow[]> {
+  const rows = await db().feature.findMany({
+    where: { project_id: projectId, ...owned(ownerId) }, orderBy: { created_at: 'desc' }, select: FEATURE_FIELDS,
   })
+  return rows.map(toFeatureRow)
 }
 
-export async function listFeatures(projectId: string): Promise<FeatureRow[]> {
-  const db = sql()
-  const features = await db`
-    select id, project_id, title, description, created_at, updated_at from features
-    where project_id = ${projectId} order by created_at desc`
-  const rows = features as unknown as Omit<FeatureRow, 'repos' | 'state'>[]
-  return assemble(rows, await featureRepos(db, rows.map((f) => f.id)))
-}
-
-export async function getFeature(id: string): Promise<FeatureRow | null> {
-  const db = sql()
-  const [f] = await db`select id, project_id, title, description, created_at, updated_at from features where id = ${id}`
-  if (!f) return null
-  return assemble([f as never], await featureRepos(db, [id]))[0]
+export async function getFeature(id: string, ownerId: string): Promise<FeatureRow | null> {
+  const f = await db().feature.findFirst({ where: { id, ...owned(ownerId) }, select: FEATURE_FIELDS })
+  return f ? toFeatureRow(f) : null
 }
 
 /** Checks every entry against the project's repos; returns rows ready to store. */
-async function resolveRepos(db: postgres.Sql, projectId: string, input: FeatureRepoInput[]) {
-  const repos = (await db`select id, full_name from repos where project_id = ${projectId}`) as unknown as {
-    id: string
-    full_name: string
-  }[]
+async function resolveRepos(tx: Prisma.TransactionClient, projectId: string, input: FeatureRepoInput[]) {
+  const repos = await tx.repo.findMany({ where: { project_id: projectId }, select: { id: true, full_name: true } })
   return input.map((e) => {
     const repo = repos.find((r) => r.id === e.repo_id)
     if (!repo) throw new FeatureInputError(`repo ${e.repo_id} is not part of this project`)
@@ -100,49 +101,49 @@ async function resolveRepos(db: postgres.Sql, projectId: string, input: FeatureR
 }
 
 /** Null when the project does not exist. */
-export async function insertFeature(projectId: string, input: FeatureInput): Promise<{ id: string } | null> {
-  return sql().begin(async (tx) => {
-    const [project] = await tx`select id from projects where id = ${projectId}`
+export async function insertFeature(
+  projectId: string,
+  ownerId: string,
+  input: FeatureInput,
+): Promise<{ id: string } | null> {
+  return db().$transaction(async (tx) => {
+    const project = await tx.project.findFirst({ where: { id: projectId, owner_id: ownerId }, select: { id: true } })
     if (!project) return null
-    const repos = await resolveRepos(tx as unknown as postgres.Sql, projectId, input.repos)
-    const id = crypto.randomUUID()
-    await tx`insert into features (id, project_id, title, description)
-      values (${id}, ${projectId}, ${input.title}, ${input.description})`
-    for (const r of repos) {
-      await tx`insert into feature_repos (id, feature_id, repo_id, pr_url, pr_number, requirements)
-        values (${crypto.randomUUID()}, ${id}, ${r.repo_id}, ${r.pr_url}, ${r.pr_number}, ${r.requirements})`
-    }
-    return { id }
-  }) as Promise<{ id: string } | null>
+    const repos = await resolveRepos(tx, projectId, input.repos)
+    return tx.feature.create({
+      data: { project_id: projectId, title: input.title, description: input.description, repos: { create: repos } },
+      select: { id: true },
+    })
+  })
 }
 
 /**
  * Repos present before and after keep their row (and run history); removed repos lose theirs.
  * Returns false when the feature does not exist.
  */
-export async function updateFeature(id: string, input: Partial<FeatureInput>): Promise<boolean> {
-  return sql().begin(async (tx) => {
-    const [f] = await tx`
-      update features set title = coalesce(${input.title ?? null}, title),
-        description = coalesce(${input.description ?? null}, description), updated_at = now()
-      where id = ${id} returning project_id`
+export async function updateFeature(id: string, ownerId: string, input: Partial<FeatureInput>): Promise<boolean> {
+  return db().$transaction(async (tx) => {
+    const f = await tx.feature.findFirst({ where: { id, ...owned(ownerId) }, select: { project_id: true } })
     if (!f) return false
+    await tx.feature.update({
+      where: { id },
+      data: { title: input.title, description: input.description, updated_at: new Date() },
+    })
     if (input.repos) {
-      const repos = await resolveRepos(tx as unknown as postgres.Sql, f.project_id, input.repos)
-      const keep = repos.map((r) => r.repo_id)
-      if (keep.length) await tx`delete from feature_repos where feature_id = ${id} and repo_id not in ${tx(keep)}`
-      else await tx`delete from feature_repos where feature_id = ${id}`
-      for (const r of repos) {
-        await tx`insert into feature_repos (id, feature_id, repo_id, pr_url, pr_number, requirements)
-          values (${crypto.randomUUID()}, ${id}, ${r.repo_id}, ${r.pr_url}, ${r.pr_number}, ${r.requirements})
-          on conflict (feature_id, repo_id) do update
-          set pr_url = excluded.pr_url, pr_number = excluded.pr_number, requirements = excluded.requirements`
+      const repos = await resolveRepos(tx, f.project_id, input.repos)
+      await tx.featureRepo.deleteMany({ where: { feature_id: id, repo_id: { notIn: repos.map((r) => r.repo_id) } } })
+      for (const { repo_id, ...r } of repos) {
+        await tx.featureRepo.upsert({
+          where: { feature_id_repo_id: { feature_id: id, repo_id } },
+          create: { feature_id: id, repo_id, ...r },
+          update: r,
+        })
       }
     }
     return true
-  }) as Promise<boolean>
+  })
 }
 
-export async function deleteFeature(id: string): Promise<boolean> {
-  return (await sql()`delete from features where id = ${id} returning id`).length > 0
+export async function deleteFeature(id: string, ownerId: string): Promise<boolean> {
+  return (await db().feature.deleteMany({ where: { id, ...owned(ownerId) } })).count > 0
 }

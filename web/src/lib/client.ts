@@ -1,9 +1,13 @@
 import type { FeatureInput, FeatureRow } from '@/lib/features'
 import type { ProjectRow, ProjectSummary, RepoInput, RepoRow } from '@/lib/projects'
-import type { LlmMode, RunRow } from '@/lib/runs'
+import type { RunRow } from '@/lib/runs'
 import type { EnvVarInfo } from '@/lib/env'
+import type { InstalledRepo } from '@/lib/github-app'
+import type { SessionUser } from '@/lib/sessions'
+import type { LlmSettings } from '@/lib/users'
 
-export type { FeatureRow as Feature, LlmMode, ProjectRow as Project, ProjectSummary, RepoRow as Repo, RunRow as Run }
+export type { FeatureRow as Feature, ProjectRow as Project, ProjectSummary, RepoRow as Repo, RunRow as Run }
+export type { InstalledRepo, LlmSettings }
 
 export interface Criterion {
   text: string
@@ -29,6 +33,11 @@ export interface RunDetail extends RunRow {
   events: { ts: string; level: string; message: string }[]
   result: RunResult | null
 }
+export interface Session {
+  user: SessionUser
+  llm: { configured: boolean; model: string }
+  app_url: string // the Mogo App on GitHub
+}
 export interface Stats {
   projects: number
   queued: number
@@ -38,7 +47,7 @@ export interface Stats {
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: { 'Content-Type': 'application/json' }, ...init })
-  if (res.status === 401 && path !== '/login') {
+  if (res.status === 401) {
     // full reload on purpose: drops any stale client state
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.href = '/login'
@@ -54,10 +63,13 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const send = (method: string, body?: unknown): RequestInit => ({ method, body: JSON.stringify(body ?? {}) })
 
 export const api = {
-  login: (password: string) => call<{ ok: true }>('/login', send('POST', { password })),
   stats: () => call<Stats>('/stats'),
-  session: () => call<{ login_required: boolean }>('/session'),
-  logout: () => call<{ ok: true }>('/logout', send('POST')),
+  session: () => call<Session>('/session'),
+  logout: () => call<{ ok: true }>('/auth/logout', send('POST')),
+  llm: () => call<LlmSettings>('/settings/llm'),
+  setLlm: (body: { base_url: string; model: string; api_key?: string | null }) =>
+    call<LlmSettings>('/settings/llm', send('PUT', body)),
+  installedRepos: () => call<InstalledRepo[]>('/github/repos'),
 
   projects: () => call<ProjectSummary[]>('/projects'),
   project: (id: string) => call<ProjectRow>(`/projects/${id}`),
@@ -89,7 +101,7 @@ export const api = {
     call<{ id: string }>(`/projects/${projectId}/features`, send('POST', body)),
   updateFeature: (id: string, body: Partial<FeatureInput>) => call<{ ok: true }>(`/features/${id}`, send('PATCH', body)),
   deleteFeature: (id: string) => call<{ ok: true }>(`/features/${id}`, { method: 'DELETE' }),
-  startRuns: (featureId: string, body: { repo_ids?: string[]; llm_mode: LlmMode; dry_run: boolean }) =>
+  startRuns: (featureId: string, body: { repo_ids?: string[]; dry_run: boolean }) =>
     call<{ runs: RunRow[]; errors: string[] }>(`/features/${featureId}/runs`, send('POST', body)),
 
   run: (id: string) => call<RunDetail>(`/runs/${id}`),

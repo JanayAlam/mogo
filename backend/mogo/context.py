@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mogo.config import RepoConfig
+from mogo.llm.provider import OwnerLLM
 from mogo.models import Feature, FeatureRepo, Project, Repo, RepoEnvVar, Run
 
 
@@ -28,6 +29,8 @@ class Sibling:
 class RunContext:
     cfg: RepoConfig
     repo_id: str = ""
+    installation_id: int | None = None  # the Mogo App installation on the repo
+    owner: OwnerLLM | None = None  # the project owner's LLM settings
     role: str = ""
     default_branch: str = "main"
     project_name: str = ""
@@ -99,9 +102,17 @@ def legacy_env_from(config: dict | None) -> list[str]:
     return sorted(old if isinstance(old, (dict, list)) else [])
 
 
+def _owner(project: Project) -> OwnerLLM | None:
+    u = project.owner
+    if u is None:
+        return None
+    return OwnerLLM(user_id=u.id, login=u.login, base_url=u.llm_base_url, model=u.llm_model, api_key_enc=u.llm_api_key_enc)
+
+
 def _base(repo: Repo, project: Project, feature: str) -> RunContext:
     return RunContext(
-        cfg=repo_config(repo), repo_id=repo.id, role=repo.role, default_branch=repo.default_branch or "main",
+        cfg=repo_config(repo), repo_id=repo.id, installation_id=repo.installation_id, owner=_owner(project),
+        role=repo.role, default_branch=repo.default_branch or "main",
         project_name=project.name, project_description=project.description,
         project_settings=project.settings or {}, feature=feature, legacy_env_from=legacy_env_from(repo.config),
     )

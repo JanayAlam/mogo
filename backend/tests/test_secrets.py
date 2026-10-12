@@ -53,12 +53,11 @@ def test_secrets_reach_commands_override_env_and_are_masked(settings, sf, tmp_pa
                          value_enc=encrypt(load_key(KEY), rid_repo, "API_KEY", "dash-secret-value")))
         s.commit()
     settings.mogo_secret_key = KEY
-    settings.llm_mode = "deepseek"
     report = {"summary": "the key is dash-secret-value", "findings": [
         {"path": "src/svc.ts", "line": 2, "severity": "minor", "message": "prints dash-secret-value"}]}
     llm = FakeLLM([[tool_call("run_shell", {"command": "echo $API_KEY"})], [tool_call("submit_report", report, "c2")]])
     posted = []
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     execute_run(rid, settings, sf, gh=fake_github(posted), llm_factory=lambda _c: llm, checkout=fake_checkout)
 
     assert (tmp_path / "env").read_text().strip() == "dash-secret-value test"
@@ -82,9 +81,9 @@ def test_a_bad_secret_is_a_warning_not_a_failure(settings, sf):
     with sf() as s:
         s.add(RepoEnvVar(repo_id=ids["acme/api"], name="X", sensitive=True, value_enc="v1:garbage"))
         s.commit()
-    settings.mogo_secret_key, settings.llm_mode = KEY, "deepseek"
+    settings.mogo_secret_key = KEY
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     with sf() as s:
         assert s.get(Run, rid).status == "succeeded"
@@ -93,13 +92,12 @@ def test_a_bad_secret_is_a_warning_not_a_failure(settings, sf):
 
 def test_runner_credentials_never_reach_repo_commands(settings, sf, tmp_path, monkeypatch):
     """Runner repo secrets are for the runner: a repo's commands get only its own env and secrets."""
-    for name in ("GITHUB_TOKEN", "DEEPSEEK_API_KEY", "DATABASE_URL", "MOGO_SECRET_KEY", "ANTROTRIP_SERVER_JWT"):
+    for name in ("GITHUB_APP_PRIVATE_KEY", "DATABASE_URL", "MOGO_SECRET_KEY", "API_JWT_SECRET"):
         monkeypatch.setenv(name, "runner-only-value")
     seed_repos(sf, {"acme/api": RepoConfig(name="acme/api", gates=[f"env > {tmp_path}/env"])},
                env={"acme/api": {"APP_MODE": "test"}})
-    settings.llm_mode = "deepseek"
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    execute_run(make_run(sf, llm_mode="deepseek"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
+    execute_run(make_run(sf), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
                 checkout=fake_checkout)
     seen = (tmp_path / "env").read_text()
     assert "APP_MODE=test" in seen and "runner-only-value" not in seen
@@ -107,15 +105,14 @@ def test_runner_credentials_never_reach_repo_commands(settings, sf, tmp_path, mo
 
 def test_a_repo_still_listing_env_from_gets_a_warning_not_the_values(settings, sf, tmp_path, monkeypatch):
     from mogo.models import Repo
-    monkeypatch.setenv("ANTROTRIP_SERVER_JWT", "runner-only-value")
+    monkeypatch.setenv("API_JWT_SECRET", "runner-only-value")
     ids = seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
     with sf() as s:
         s.get(Repo, ids["acme/api"]).config = {"gates": [f"env > {tmp_path}/env"],
-                                               "env_from": {"JWT_SECRET": "ANTROTRIP_SERVER_JWT", "SMTP": "SMTP"}}
+                                               "env_from": {"JWT_SECRET": "API_JWT_SECRET", "SMTP": "SMTP"}}
         s.commit()
-    settings.llm_mode = "deepseek"
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     assert "runner-only-value" not in (tmp_path / "env").read_text()
     with sf() as s:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 
@@ -19,15 +19,30 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+class User(Base):
+    """Signed in with GitHub (web app). The LLM key: AES-256-GCM, additional data "user:<id>:llm_api_key"."""
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    github_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    login: Mapped[str] = mapped_column(String(100))
+    llm_base_url: Mapped[str] = mapped_column(String(500), default="")
+    llm_model: Mapped[str] = mapped_column(String(200), default="")
+    llm_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     settings: Mapped[dict] = mapped_column(JSON, default=dict)  # e.g. {"checks": {"no-duplicate-types": false}}
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
+    owner: Mapped[User] = relationship()
     repos: Mapped[list["Repo"]] = relationship(back_populates="project", cascade="all, delete-orphan")
     features: Mapped[list["Feature"]] = relationship(back_populates="project", cascade="all, delete-orphan")
 
@@ -41,6 +56,8 @@ class Repo(Base):
     full_name: Mapped[str] = mapped_column(String(200))  # owner/repo, as in PR urls
     role: Mapped[str] = mapped_column(String(100), default="")  # free text: backend, frontend, admin-frontend, ...
     default_branch: Mapped[str] = mapped_column(String(200), default="main")
+    # Mogo App installation covering this repo; null when uninstalled (the runner then looks it up once more).
+    installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     config: Mapped[dict] = mapped_column(JSON, default=dict)  # RepoConfig fields except `name`
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -117,7 +134,7 @@ class Run(Base):
     pr_url: Mapped[str] = mapped_column(String(500))
     pr_number: Mapped[int] = mapped_column(Integer)
     feature: Mapped[str] = mapped_column(Text, default="")
-    llm_mode: Mapped[str] = mapped_column(String(20), default="auto")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|running|succeeded|failed
     llm_used: Mapped[str] = mapped_column(String(100), default="")

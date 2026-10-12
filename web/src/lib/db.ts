@@ -1,8 +1,10 @@
-import postgres from 'postgres'
+import { PrismaPg } from '@prisma/adapter-pg'
 
-const g = globalThis as { __sql?: postgres.Sql }
+import { PrismaClient } from '@/generated/prisma/client'
 
-// Prisma-only query options (connection strings are often copied from a Prisma app). postgres.js would send them
+const g = globalThis as { __prisma?: PrismaClient }
+
+// Prisma-only query options (connection strings are often copied from a Prisma app). node-postgres would send them
 // to the server as settings, which it rejects. Same list as PRISMA_OPTIONS in backend/mogo/config.py.
 const PRISMA_OPTIONS = [
   'connection_limit', 'pool_timeout', 'pgbouncer', 'schema', 'statement_cache_size', 'socket_timeout',
@@ -16,14 +18,24 @@ export function cleanDatabaseUrl(raw: string): string {
   return url.toString()
 }
 
-/** Lazy so `next build` works without env. Supabase pooler runs in transaction mode: no prepared statements. */
-export function sql(): postgres.Sql {
-  if (!g.__sql) {
+/**
+ * The Prisma client, created on first use so `next build` works without env. One connection: on Vercel each instance
+ * serves one request at a time, and the Supabase pooler multiplexes. TLS without certificate checks (Supabase's
+ * pooler certificate is not in Node's store); `sslmode` in the URL is dropped because node-postgres would read it as
+ * verify-full. Schema: db/migrations, mirrored in prisma/schema.prisma (see prisma.config.ts).
+ */
+export function db(): PrismaClient {
+  if (!g.__prisma) {
     const raw = process.env.DATABASE_URL
     if (!raw) throw new Error('DATABASE_URL is not set')
-    const url = cleanDatabaseUrl(raw)
-    const local = /@(localhost|127\.0\.0\.1)/.test(url)
-    g.__sql = postgres(url, { prepare: false, max: 1, ssl: local ? false : 'require' })
+    const url = new URL(cleanDatabaseUrl(raw))
+    url.searchParams.delete('sslmode')
+    const local = ['localhost', '127.0.0.1'].includes(url.hostname)
+    const adapter = new PrismaPg({ connectionString: url.toString(), max: 1, ssl: local ? false : { rejectUnauthorized: false } })
+    g.__prisma = new PrismaClient({ adapter })
   }
-  return g.__sql
+  return g.__prisma
 }
+
+/** bigint columns (GitHub ids) come back as BigInt, which JSON cannot carry: the API sends them as strings. */
+export const bigintString = (v: bigint | null) => (v === null ? null : v.toString())

@@ -1,4 +1,5 @@
-import { sql } from '@/lib/db'
+import { Prisma } from '@/generated/prisma/client'
+import { bigintString, db } from '@/lib/db'
 import type { RunStatus } from '@/lib/runs'
 
 /** Run settings of a repo. Mirrors RepoConfig in backend/mogo/config.py (minus `name`). Never secret values. */
@@ -21,6 +22,7 @@ export interface RepoRow {
   id: string
   project_id: string
   full_name: string
+  installation_id: string | null // bigint, so postgres.js returns a string; null: the Mogo App no longer covers the repo
   role: string
   default_branch: string
   config: Partial<RepoConfig>
@@ -72,63 +74,108 @@ export interface ProjectRow {
   repos: RepoRow[]
 }
 
-const PROJECT_RUNS = `runs x join feature_repos fr on fr.id = x.feature_repo_id join features f on f.id = fr.feature_id
-  where f.project_id = p.id`
-
-export async function listProjects(): Promise<ProjectSummary[]> {
-  const db = sql()
-  const rows = await db`
-    select p.id, p.name, p.description, p.created_at,
-      coalesce((select json_agg(json_build_object('id', r.id, 'full_name', r.full_name, 'role', r.role)
-                order by r.created_at) from repos r where r.project_id = p.id), '[]') as repos,
-      (select count(*)::int from features f where f.project_id = p.id) as feature_count,
-      (select count(*)::int from ${db.unsafe(PROJECT_RUNS)}) as run_count,
-      (select x.status from ${db.unsafe(PROJECT_RUNS)} order by x.created_at desc limit 1) as latest_status,
-      (select x.verdict from ${db.unsafe(PROJECT_RUNS)} order by x.created_at desc limit 1) as latest_verdict
-    from projects p order by p.created_at`
-  return rows as unknown as ProjectSummary[]
+/**
+ * Every function takes the signed-in user's id and only sees that user's projects (and their repos): someone else's
+ * id reads as "not found".
+ */
+export async function listProjects(ownerId: string): Promise<ProjectSummary[]> {
+  const projects = await db().project.findMany({
+    where: { owner_id: ownerId },
+    orderBy: { created_at: 'asc' },
+    select: {
+      id: true, name: true, description: true, created_at: true,
+      repos: { select: { id: true, full_name: true, role: true }, orderBy: { created_at: 'asc' } },
+      _count: { select: { features: true } },
+    },
+  })
+  return Promise.all(
+    projects.map(async ({ _count, ...p }) => {
+      const runs: Prisma.RunWhereInput = { featureRepo: { feature: { project_id: p.id } } }
+      const [run_count, latest] = await Promise.all([
+        db().run.count({ where: runs }),
+        db().run.findFirst({ where: runs, orderBy: { created_at: 'desc' }, select: { status: true, verdict: true } }),
+      ])
+      return {
+        ...p,
+        created_at: p.created_at.toISOString(),
+        feature_count: _count.features,
+        run_count,
+        latest_status: (latest?.status as RunStatus | undefined) ?? null,
+        latest_verdict: latest?.verdict ?? null,
+      }
+    }),
+  )
 }
 
-const PROFILE_FIELDS = `'main_sha', rp.main_sha, 'built_at', rp.built_at, 'error', rp.error,
-  'files', (rp.structure->>'files')::int, 'types', json_array_length(rp.type_index)`
-const REPO_COLUMNS = `r.id, r.project_id, r.full_name, r.role, r.default_branch, r.config, r.created_at, r.updated_at,
-  (select json_build_object(${PROFILE_FIELDS}) from repo_profiles rp where rp.repo_id = r.id) as profile`
-const REPO_DETAIL_COLUMNS = `r.id, r.project_id, r.full_name, r.role, r.default_branch, r.config, r.created_at, r.updated_at,
-  (select json_build_object(${PROFILE_FIELDS}, 'summary', rp.summary, 'suggestions', rp.suggestions)
-   from repo_profiles rp where rp.repo_id = r.id) as profile`
+const REPO_FIELDS = {
+  id: true, project_id: true, full_name: true, installation_id: true, role: true, default_branch: true, config: true,
+  created_at: true, updated_at: true,
+} satisfies Prisma.RepoSelect
 
-export async function getProject(id: string): Promise<ProjectRow | null> {
-  const db = sql()
-  const [project] = await db`select id, name, description, settings, created_at from projects where id = ${id}`
+type RepoFields = Prisma.RepoGetPayload<{ select: typeof REPO_FIELDS }>
+
+/**
+ * Profile summaries. File and type counts are computed in SQL: a type index can be large and only its length is
+ * shown, so it is not loaded.
+ */
+async function profiles(repoIds: string[], detail: boolean): Promise<Map<string, ProfileInfo>> {
+  if (repoIds.length === 0) return new Map()
+  const rows = await db().$queryRaw<(ProfileInfo & { repo_id: string })[]>`
+    select repo_id, main_sha, built_at, error, (structure->>'files')::int as files,
+      json_array_length(type_index) as types, summary, suggestions
+    from repo_profiles where repo_id in (${Prisma.join(repoIds)})`
+  return new Map(
+    rows.map(({ repo_id, summary, suggestions, ...p }) => [repo_id, detail ? { ...p, summary, suggestions } : p]),
+  )
+}
+
+async function withProfiles(repos: RepoFields[], detail = false): Promise<RepoRow[]> {
+  const found = await profiles(repos.map((r) => r.id), detail)
+  return repos.map((r) => ({
+    ...r,
+    installation_id: bigintString(r.installation_id),
+    config: r.config as Partial<RepoConfig>,
+    created_at: r.created_at.toISOString(),
+    updated_at: r.updated_at.toISOString(),
+    profile: found.get(r.id) ?? null,
+  }))
+}
+
+export async function getProject(id: string, ownerId: string): Promise<ProjectRow | null> {
+  const project = await db().project.findFirst({
+    where: { id, owner_id: ownerId },
+    select: {
+      id: true, name: true, description: true, settings: true, created_at: true,
+      repos: { select: REPO_FIELDS, orderBy: { created_at: 'asc' } },
+    },
+  })
   if (!project) return null
-  const repos = await db`
-    select ${db.unsafe(REPO_COLUMNS)} from repos r where r.project_id = ${id} order by r.created_at`
-  return { ...project, repos } as unknown as ProjectRow
+  return {
+    ...project,
+    settings: project.settings as Record<string, unknown>,
+    created_at: project.created_at.toISOString(),
+    repos: await withProfiles(project.repos),
+  }
 }
 
-export async function insertProject(p: { name: string; description: string }): Promise<{ id: string }> {
-  const [row] = await sql()`
-    insert into projects (id, name, description) values (${crypto.randomUUID()}, ${p.name}, ${p.description})
-    returning id`
-  return row as { id: string }
+export async function insertProject(ownerId: string, p: { name: string; description: string }): Promise<{ id: string }> {
+  return db().project.create({ data: { owner_id: ownerId, ...p }, select: { id: true } })
 }
 
 export async function updateProject(
   id: string,
+  ownerId: string,
   p: { name?: string; description?: string; settings?: Record<string, unknown> },
 ): Promise<boolean> {
-  const db = sql()
-  const rows = await db`
-    update projects set
-      name = coalesce(${p.name ?? null}, name),
-      description = coalesce(${p.description ?? null}, description),
-      settings = coalesce(${p.settings ? db.json(p.settings as never) : null}::json, settings)
-    where id = ${id} returning id`
-  return rows.length > 0
+  const { count } = await db().project.updateMany({
+    where: { id, owner_id: ownerId },
+    data: { name: p.name, description: p.description, settings: p.settings as Prisma.InputJsonObject | undefined },
+  })
+  return count > 0
 }
 
-export async function deleteProject(id: string): Promise<boolean> {
-  return (await sql()`delete from projects where id = ${id} returning id`).length > 0
+export async function deleteProject(id: string, ownerId: string): Promise<boolean> {
+  return (await db().project.deleteMany({ where: { id, owner_id: ownerId } })).count > 0
 }
 
 export interface RepoInput {
@@ -138,40 +185,58 @@ export interface RepoInput {
   config: Partial<RepoConfig>
 }
 
-export async function getRepo(id: string): Promise<RepoRow | null> {
-  const db = sql()
-  const [row] = await db`select ${db.unsafe(REPO_DETAIL_COLUMNS)} from repos r where r.id = ${id}`
-  return (row as unknown as RepoRow) ?? null
+const ownedRepo = (id: string, ownerId: string): Prisma.RepoWhereInput => ({ id, project: { owner_id: ownerId } })
+
+export async function getRepo(id: string, ownerId: string): Promise<RepoRow | null> {
+  const repo = await db().repo.findFirst({ where: ownedRepo(id, ownerId), select: REPO_FIELDS })
+  return repo ? (await withProfiles([repo], true))[0] : null
 }
 
-/** Null when the project does not exist; throws 'duplicate' when the repo is already in it. */
-export async function insertRepo(projectId: string, r: RepoInput): Promise<{ id: string } | null> {
-  const db = sql()
+/**
+ * Null when the project does not exist; throws 'duplicate' when the repo is already in it. The caller has checked
+ * that the user may use the repo through `installationId` (lib/github-app.ts accessibleRepo).
+ */
+export async function insertRepo(
+  projectId: string,
+  ownerId: string,
+  r: RepoInput,
+  installationId: number,
+): Promise<{ id: string } | null> {
+  const project = await db().project.findFirst({ where: { id: projectId, owner_id: ownerId }, select: { id: true } })
+  if (!project) return null
   try {
-    const [row] = await db`
-      insert into repos (id, project_id, full_name, role, default_branch, config)
-      select ${crypto.randomUUID()}, p.id, ${r.full_name}, ${r.role}, ${r.default_branch}, ${db.json(r.config as never)}::json
-      from projects p where p.id = ${projectId}
-      returning id`
-    return (row as { id: string }) ?? null
+    return await db().repo.create({
+      data: {
+        project_id: projectId, full_name: r.full_name, installation_id: BigInt(installationId), role: r.role,
+        default_branch: r.default_branch, config: r.config as Prisma.InputJsonObject,
+      },
+      select: { id: true },
+    })
   } catch (e) {
-    if ((e as { code?: string }).code === '23505') throw new Error('duplicate')
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') throw new Error('duplicate')
     throw e
   }
 }
 
-export async function updateRepo(id: string, r: Partial<RepoInput>): Promise<boolean> {
-  const db = sql()
-  const rows = await db`
-    update repos set
-      role = coalesce(${r.role ?? null}, role),
-      default_branch = coalesce(${r.default_branch ?? null}, default_branch),
-      config = coalesce(${r.config ? db.json(r.config as never) : null}::json, config),
-      updated_at = now()
-    where id = ${id} returning id`
-  return rows.length > 0
+export async function updateRepo(id: string, ownerId: string, r: Partial<RepoInput>): Promise<boolean> {
+  const { count } = await db().repo.updateMany({
+    where: ownedRepo(id, ownerId),
+    data: {
+      role: r.role, default_branch: r.default_branch, config: r.config as Prisma.InputJsonObject | undefined,
+      updated_at: new Date(),
+    },
+  })
+  return count > 0
 }
 
-export async function deleteRepo(id: string): Promise<boolean> {
-  return (await sql()`delete from repos where id = ${id} returning id`).length > 0
+export async function deleteRepo(id: string, ownerId: string): Promise<boolean> {
+  return (await db().repo.deleteMany({ where: ownedRepo(id, ownerId) })).count > 0
+}
+
+/** After re-checking access: the installation that covers the owner's copies of a repo now (null: none). */
+export async function setRepoInstallation(ownerId: string, fullName: string, installationId: number | null) {
+  await db().repo.updateMany({
+    where: { full_name: { equals: fullName, mode: 'insensitive' }, project: { owner_id: ownerId } },
+    data: { installation_id: installationId === null ? null : BigInt(installationId) },
+  })
 }

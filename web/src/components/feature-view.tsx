@@ -20,18 +20,12 @@ import {
   timeAgo,
   useAction,
   useApi,
+  useSession,
 } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { checkTitle } from "@/lib/checks";
@@ -39,7 +33,6 @@ import {
   api,
   type Feature,
   type Finding,
-  type LlmMode,
   type RunDetail,
 } from "@/lib/client";
 import { runState } from "@/lib/status";
@@ -56,7 +49,7 @@ export function FeatureView() {
     featureId,
     (f) => f.repos.some((r) => inFlight(r.latest_run?.status)),
   );
-  const [mode, setMode] = useState<LlmMode>("auto");
+  const session = useSession();
   const [dry, setDry] = useState(false);
   const start = useAction();
   const [starting, setStarting] = useState<string | null>(null); // "all" or a repo id
@@ -77,7 +70,6 @@ export function FeatureView() {
       try {
         const res = await api.startRuns(f.id, {
           repo_ids: repoIds,
-          llm_mode: mode,
           dry_run: dry,
         });
         if (res.errors.length) {
@@ -139,20 +131,17 @@ export function FeatureView() {
 
       <Card className="mb-6">
         <CardContent className="flex flex-wrap items-end gap-6 p-4">
-          <div className="w-80 space-y-2">
-            <Label htmlFor="mode">LLM</Label>
-            <Select value={mode} onValueChange={(v) => setMode(v as LlmMode)}>
-              <SelectTrigger id="mode">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">
-                  auto (local if reachable, else DeepSeek)
-                </SelectItem>
-                <SelectItem value="local">local only</SelectItem>
-                <SelectItem value="deepseek">DeepSeek only</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="space-y-1 pb-2">
+            <Eyebrow>LLM</Eyebrow>
+            {session && !session.llm.configured ? (
+              <Link href="/settings" className="text-sm text-destructive underline underline-offset-2">
+                Set up your LLM to run checks
+              </Link>
+            ) : (
+              <Link href="/settings" className="font-mono text-sm hover:underline">
+                {session?.llm.model ?? "…"}
+              </Link>
+            )}
           </div>
           <div className="flex items-center gap-2 pb-2">
             <Checkbox

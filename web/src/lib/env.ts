@@ -1,9 +1,8 @@
-import { createCipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
-import type postgres from 'postgres'
-
+import type { Prisma } from '@/generated/prisma/client'
+import { db } from '@/lib/db'
 import { looksSensitive } from '@/lib/dotenv'
-import { sql } from '@/lib/db'
 
 /**
  * A repo's environment variables (table repo_env). Sensitive values are encrypted here and decrypted only by the
@@ -28,6 +27,16 @@ export function encryptSecret(key: Buffer, repoId: string, name: string, value: 
   return 'v1:' + Buffer.concat([iv, enc, cipher.getAuthTag()]).toString('base64')
 }
 
+/** Only for values the web app itself needs back (a user's GitHub token); repo secrets are decrypted by the runner. */
+export function decryptSecret(key: Buffer, repoId: string, name: string, token: string): string {
+  if (!token.startsWith('v1:')) throw new SecretKeyError(`${name}: unknown secret format`)
+  const raw = Buffer.from(token.slice(3), 'base64')
+  const decipher = createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12))
+  decipher.setAAD(Buffer.from(`${repoId}:${name}`))
+  decipher.setAuthTag(raw.subarray(raw.length - 16))
+  return Buffer.concat([decipher.update(raw.subarray(12, raw.length - 16)), decipher.final()]).toString('utf8')
+}
+
 export interface EnvVarInfo {
   name: string
   sensitive: boolean
@@ -36,21 +45,34 @@ export interface EnvVarInfo {
 }
 
 export async function listEnv(repoId: string): Promise<EnvVarInfo[]> {
-  const rows = await sql()`
-    select name, sensitive, case when sensitive then null else value end as value, updated_at
-    from repo_env where repo_id = ${repoId} order by name`
-  return rows as unknown as EnvVarInfo[]
+  const rows = await db().repoEnv.findMany({
+    where: { repo_id: repoId },
+    orderBy: { name: 'asc' },
+    select: { name: true, sensitive: true, value: true, updated_at: true },
+  })
+  return rows.map((r) => ({ ...r, value: r.sensitive ? null : r.value, updated_at: r.updated_at.toISOString() }))
 }
 
-async function write(tx: postgres.Sql, repoId: string, name: string, value: string, sensitive: boolean) {
-  const enc = sensitive ? encryptSecret(secretKey(), repoId, name, value) : null
-  const plain = sensitive ? null : value
-  await tx`
-    insert into repo_env (repo_id, name, sensitive, value, value_enc)
-    values (${repoId}, ${name}, ${sensitive}, ${plain}, ${enc})
-    on conflict (repo_id, name) do update
-    set sensitive = excluded.sensitive, value = excluded.value, value_enc = excluded.value_enc, updated_at = now()`
+async function write(tx: Prisma.TransactionClient, repoId: string, name: string, value: string, sensitive: boolean) {
+  const data = {
+    sensitive,
+    value: sensitive ? null : value,
+    value_enc: sensitive ? encryptSecret(secretKey(), repoId, name, value) : null,
+  }
+  await tx.repoEnv.upsert({
+    where: { repo_id_name: { repo_id: repoId, name } },
+    create: { repo_id: repoId, name, ...data },
+    update: { ...data, updated_at: new Date() },
+  })
 }
+
+// Reads that lock the rows they return until the transaction ends (Prisma has no FOR UPDATE), so two edits of the
+// same variables cannot interleave between the read and the write.
+const lockVar = (tx: Prisma.TransactionClient, repoId: string, name: string) => tx.$queryRaw<
+  { sensitive: boolean; value: string | null }[]
+>`select sensitive, value from repo_env where repo_id = ${repoId} and name = ${name} for update`
+const lockVars = (tx: Prisma.TransactionClient, repoId: string) =>
+  tx.$queryRaw<{ name: string; sensitive: boolean }[]>`select name, sensitive from repo_env where repo_id = ${repoId} for update`
 
 /**
  * Create or change one variable. `value` omitted keeps the current value: a plain variable can become sensitive
@@ -61,8 +83,8 @@ export async function setEnvVar(
   name: string,
   change: { value?: string; sensitive: boolean },
 ): Promise<void> {
-  await sql().begin(async (tx) => {
-    const [cur] = await tx`select sensitive, value from repo_env where repo_id = ${repoId} and name = ${name} for update`
+  await db().$transaction(async (tx) => {
+    const [cur] = await lockVar(tx, repoId, name)
     let value = change.value
     if (value === undefined) {
       if (!cur) throw new EnvRuleError('value is required for a new variable')
@@ -72,12 +94,12 @@ export async function setEnvVar(
       if (cur.sensitive) return // unchanged
       value = cur.value as string
     }
-    await write(tx as unknown as postgres.Sql, repoId, name, value, change.sensitive)
+    await write(tx, repoId, name, value, change.sensitive)
   })
 }
 
 export async function deleteEnvVar(repoId: string, name: string): Promise<boolean> {
-  return (await sql()`delete from repo_env where repo_id = ${repoId} and name = ${name} returning name`).length > 0
+  return (await db().repoEnv.deleteMany({ where: { repo_id: repoId, name } })).count > 0
 }
 
 /**
@@ -88,16 +110,15 @@ export async function importEnv(
   repoId: string,
   entries: { name: string; value: string }[],
 ): Promise<{ added: string[]; replaced: string[]; sensitive: string[] }> {
-  return sql().begin(async (tx) => {
-    const rows = await tx`select name, sensitive from repo_env where repo_id = ${repoId} for update`
-    const existing = new Map(rows.map((r) => [r.name as string, r.sensitive as boolean]))
+  return db().$transaction(async (tx) => {
+    const existing = new Map((await lockVars(tx, repoId)).map((r) => [r.name, r.sensitive]))
     const sensitive: string[] = []
     for (const e of entries) {
       const s = existing.get(e.name) ?? looksSensitive(e.name)
       if (s) sensitive.push(e.name)
-      await write(tx as unknown as postgres.Sql, repoId, e.name, e.value, s)
+      await write(tx, repoId, e.name, e.value, s)
     }
     const names = entries.map((e) => e.name)
     return { added: names.filter((n) => !existing.has(n)), replaced: names.filter((n) => existing.has(n)), sensitive }
-  }) as Promise<{ added: string[]; replaced: string[]; sensitive: string[] }>
+  })
 }

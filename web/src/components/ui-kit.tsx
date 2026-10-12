@@ -1,13 +1,13 @@
 "use client";
 
-import { ArrowLeft, LogOut } from "lucide-react";
+import { ArrowLeft, ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import Link from "next/link";
 import {
-  type ReactNode,
   useCallback,
   useEffect,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 
 import {
@@ -34,8 +34,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
-import { api } from "@/lib/client";
+import { api, type Session } from "@/lib/client";
 import type { ReviewState } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +57,7 @@ export function Shell({ children }: { children: ReactNode }) {
             className="flex items-center gap-2 font-mono text-sm font-semibold rounded bg-primary px-1.5 py-0.5 text-primary-foreground">
             mogo
           </Link>
-          <LogoutButton />
+          <UserMenu />
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-10">{children}</main>
@@ -57,28 +65,74 @@ export function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-/** Shown only when this deployment has a login (APP_PASSWORD). */
-function LogoutButton() {
-  const [show, setShow] = useState(false);
+// One request per page load; Settings calls refreshSession() after changing the LLM.
+let sessionPromise: Promise<Session> | null = null;
+const sessionListeners = new Set<(s: Session) => void>();
+
+export function refreshSession() {
+  sessionPromise = api.session();
+  sessionPromise
+    .then((s) => sessionListeners.forEach((l) => l(s)))
+    .catch(() => {});
+}
+
+/** The signed-in user and whether their LLM is set up; null while loading. */
+export function useSession(): Session | null {
+  const [session, setSession] = useState<Session | null>(null);
   useEffect(() => {
-    api
-      .session()
-      .then((s) => setShow(s.login_required))
-      .catch(() => setShow(false));
+    if (!sessionPromise) refreshSession();
+    sessionPromise!.then(setSession).catch(() => {});
+    sessionListeners.add(setSession);
+    return () => {
+      sessionListeners.delete(setSession);
+    };
   }, []);
-  if (!show) return null;
+  return session;
+}
+
+/** The signed-in user's name; opens Settings and Log out. */
+function UserMenu() {
+  const session = useSession();
+  if (!session) return null;
+  const { user } = session;
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={async () => {
-        await api.logout().catch(() => {});
-        // full reload on purpose: drops any client state of the signed-in session
-        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-        window.location.href = "/login";
-      }}>
-      <LogOut /> Log out
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="sm" className="data-[state=open]:bg-accent">
+          {user.avatar_url ? (
+            // eslint-disable-next-line @next/next/no-img-element -- a 20px GitHub avatar needs no optimizing
+            <img src={user.avatar_url} alt="" className="size-5 rounded-full" />
+          ) : (
+            <UserRound />
+          )}
+          {user.login}
+          <ChevronDown className="opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {user.name && user.name !== user.login && (
+          <>
+            <DropdownMenuLabel className="truncate font-normal text-muted-foreground">{user.name}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+          </>
+        )}
+        <DropdownMenuItem asChild>
+          <Link href="/settings">
+            <Settings /> Settings
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          onSelect={async () => {
+            await api.logout().catch(() => {});
+            // full reload on purpose: drops any client state of the signed-in session
+            // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+            window.location.href = "/login";
+          }}>
+          <LogOut /> Log out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

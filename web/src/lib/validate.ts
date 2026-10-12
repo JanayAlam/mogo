@@ -1,11 +1,9 @@
 import type { FeatureInput } from '@/lib/features'
 import type { RepoConfig, RepoInput } from '@/lib/projects'
-import type { LlmMode } from '@/lib/runs'
 
 /** Each validator returns the clean value or an error message for a 422. */
 type Result<T> = T | string
 
-const MODES = ['auto', 'local', 'deepseek']
 const FULL_NAME = /^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -153,14 +151,11 @@ function featureInput(body: Record<string, unknown>, partial: boolean): Partial<
 
 export interface StartInput {
   repo_ids: string[] | null // null = every repo of the feature
-  llm_mode: LlmMode
   dry_run: boolean
 }
 
 export function validateStartInput(body: unknown): Result<StartInput> {
   const b = isObj(body) ? body : {}
-  const mode = b.llm_mode ?? 'auto'
-  if (typeof mode !== 'string' || !MODES.includes(mode)) return `llm_mode must be one of ${MODES.join(', ')}`
   let repoIds: string[] | null = null
   if (b.repo_ids !== undefined && b.repo_ids !== null) {
     if (!Array.isArray(b.repo_ids) || !b.repo_ids.every((x) => typeof x === 'string')) {
@@ -168,7 +163,35 @@ export function validateStartInput(body: unknown): Result<StartInput> {
     }
     repoIds = b.repo_ids
   }
-  return { repo_ids: repoIds, llm_mode: mode as LlmMode, dry_run: b.dry_run === true }
+  return { repo_ids: repoIds, dry_run: b.dry_run === true }
+}
+
+// --- the user's LLM
+
+export interface LlmInput {
+  base_url: string
+  model: string
+  api_key?: string | null // undefined keeps the stored key, null or "" removes it
+}
+
+export function validateLlmInput(body: unknown): Result<LlmInput> {
+  if (!isObj(body)) return 'invalid JSON body'
+  return check(() => {
+    const baseUrl = (str(body, 'base_url', 500, true) as string).replace(/\/+$/, '')
+    let url: URL
+    try {
+      url = new URL(baseUrl)
+    } catch {
+      throw new Invalid('base_url must be a URL, e.g. https://api.openai.com/v1')
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Invalid('base_url must be http(s)')
+    if (url.username || url.password) throw new Invalid('put the API key in api_key, not in the URL')
+    const model = str(body, 'model', 200, true) as string
+    const out: LlmInput = { base_url: baseUrl, model }
+    if (body.api_key === null) out.api_key = null
+    else if (body.api_key !== undefined) out.api_key = str(body, 'api_key', 1000) || null
+    return out
+  })
 }
 
 // --- repo environment variables

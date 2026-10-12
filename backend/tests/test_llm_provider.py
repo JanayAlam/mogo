@@ -1,34 +1,37 @@
+import base64
+
 import pytest
 
-from mogo.llm.provider import LLMUnavailable, resolve_llm
+from mogo.llm.provider import LLMUnavailable, OwnerLLM, make_client, resolve_llm, user_aad
+from mogo.secrets import encrypt
+
+KEY_B64 = base64.b64encode(b"k" * 32).decode()
 
 
-def test_auto_prefers_local_when_reachable(settings):
-    assert resolve_llm(settings, "auto", probe=lambda _u: True).name == "local"
+def owner(**kw):
+    return OwnerLLM(**{"user_id": "u1", "login": "alice", "base_url": "https://api.openai.com/v1",
+                       "model": "gpt-4.1", "api_key_enc": None, **kw})
 
 
-def test_auto_falls_back_to_deepseek_when_local_down(settings):
-    c = resolve_llm(settings, "auto", probe=lambda _u: False)
-    assert c.name == "deepseek" and c.api_key == "ds-key"
+def test_decrypts_the_owners_key():
+    enc = encrypt(b"k" * 32, user_aad("u1"), "llm_api_key", "sk-secret")
+    c = resolve_llm(owner(api_key_enc=enc), KEY_B64)
+    assert (c.base_url, c.model, c.api_key, c.label) == ("https://api.openai.com/v1", "gpt-4.1", "sk-secret",
+                                                         "gpt-4.1 @ api.openai.com")
 
 
-def test_auto_without_local_config_uses_deepseek(settings):
-    settings.local_llm_base_url = ""
-    assert resolve_llm(settings, "auto", probe=lambda _u: True).name == "deepseek"
+def test_a_key_of_another_user_does_not_decrypt():
+    enc = encrypt(b"k" * 32, user_aad("u2"), "llm_api_key", "sk-other")
+    with pytest.raises(LLMUnavailable, match="enter it again"):
+        resolve_llm(owner(api_key_enc=enc), KEY_B64)
 
 
-def test_forced_local_fails_loudly_when_down(settings):
-    with pytest.raises(LLMUnavailable, match="not reachable"):
-        resolve_llm(settings, "local", probe=lambda _u: False)
+def test_no_key_is_fine_for_local_servers():
+    c = resolve_llm(owner(base_url="https://ollama.example.ts.net/v1"), "")
+    assert c.api_key == "" and make_client(c).api_key == "none"
 
 
-def test_forced_deepseek_needs_key(settings):
-    settings.deepseek_api_key = ""
+@pytest.mark.parametrize("o", [None, owner(base_url=""), owner(model="")])
+def test_not_set_up(o):
     with pytest.raises(LLMUnavailable):
-        resolve_llm(settings, "deepseek")
-
-
-def test_nothing_available(settings):
-    settings.deepseek_api_key = ""
-    with pytest.raises(LLMUnavailable):
-        resolve_llm(settings, "auto", probe=lambda _u: False)
+        resolve_llm(o, KEY_B64)

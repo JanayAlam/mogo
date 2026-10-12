@@ -1,0 +1,193 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model FeatureRepo {
+  id           String  @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  feature_id   String  @db.VarChar(36)
+  repo_id      String  @db.VarChar(36)
+  pr_url       String  @db.VarChar(500)
+  pr_number    Int
+  requirements String  @default("")
+  feature      Feature @relation(fields: [feature_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  repo         Repo    @relation(fields: [repo_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs         Run[]
+
+  @@unique([feature_id, repo_id])
+  @@index([feature_id], map: "ix_feature_repos_feature_id")
+  @@index([repo_id], map: "ix_feature_repos_repo_id")
+  @@map("feature_repos")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Feature {
+  id          String        @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  project_id  String        @db.VarChar(36)
+  title       String        @db.VarChar(300)
+  description String        @default("")
+  created_at  DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime      @default(now()) @db.Timestamptz(6)
+  repos       FeatureRepo[]
+  project     Project       @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([project_id], map: "ix_features_project_id")
+  @@map("features")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Project {
+  id          String    @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  name        String    @db.VarChar(200)
+  description String    @default("")
+  settings    Json      @default("{}") @db.Json
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  owner_id    String    @db.VarChar(36)
+  features    Feature[]
+  owner       User      @relation(fields: [owner_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  repos       Repo[]
+
+  @@index([owner_id], map: "ix_projects_owner_id")
+  @@map("projects")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model RepoEnv {
+  repo_id    String   @db.VarChar(36)
+  name       String   @db.VarChar(200)
+  value_enc  String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  sensitive  Boolean  @default(true)
+  value      String?
+  repo       Repo     @relation(fields: [repo_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "repo_secrets_repo_id_fkey")
+
+  @@id([repo_id, name], map: "repo_secrets_pkey")
+  @@map("repo_env")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model RepoProfile {
+  repo_id     String   @id @db.VarChar(36)
+  main_sha    String   @default("") @db.VarChar(64)
+  structure   Json?    @db.Json
+  type_index  Json?    @db.Json
+  summary     String   @default("")
+  error       String   @default("")
+  built_at    DateTime @default(now()) @db.Timestamptz(6)
+  suggestions Json?    @db.Json
+  repo        Repo     @relation(fields: [repo_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("repo_profiles")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Repo {
+  id              String        @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  project_id      String        @db.VarChar(36)
+  full_name       String        @db.VarChar(200)
+  role            String        @default("") @db.VarChar(100)
+  default_branch  String        @default("main") @db.VarChar(200)
+  config          Json          @default("{}") @db.Json
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime      @default(now()) @db.Timestamptz(6)
+  installation_id BigInt?
+  featureRepos    FeatureRepo[]
+  env             RepoEnv[]
+  profile         RepoProfile?
+  project         Project       @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, full_name])
+  @@index([installation_id], map: "ix_repos_installation_id")
+  @@index([project_id], map: "ix_repos_project_id")
+  @@map("repos")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model RunEvent {
+  id      Int      @id @default(autoincrement())
+  run_id  String   @db.VarChar(36)
+  ts      DateTime @default(now()) @db.Timestamptz(6)
+  level   String   @default("info") @db.VarChar(10)
+  message String
+  run     Run      @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([run_id], map: "ix_run_events_run_id")
+  @@map("run_events")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Run {
+  id              String       @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  repo            String       @db.VarChar(200)
+  pr_url          String       @db.VarChar(500)
+  pr_number       Int
+  feature         String       @default("")
+  dry_run         Boolean      @default(false)
+  status          String       @default("queued") @db.VarChar(20)
+  llm_used        String       @default("") @db.VarChar(100)
+  verdict         String       @default("") @db.VarChar(30)
+  result          Json?        @db.Json
+  review_url      String       @default("") @db.VarChar(500)
+  error           String       @default("")
+  created_at      DateTime     @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime     @default(now()) @db.Timestamptz(6)
+  feature_repo_id String?      @db.VarChar(36)
+  created_by      String?      @db.VarChar(36)
+  events          RunEvent[]
+  creator         User?        @relation(fields: [created_by], references: [id], onUpdate: NoAction)
+  featureRepo     FeatureRepo? @relation(fields: [feature_repo_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([feature_repo_id], map: "ix_runs_feature_repo_id")
+  @@map("runs")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model SchemaMigration {
+  name       String    @id @db.VarChar(200)
+  applied_at DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@map("schema_migrations")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Session {
+  token_hash String   @id @db.Char(64)
+  user_id    String   @db.VarChar(36)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  expires_at DateTime @db.Timestamptz(6)
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "ix_sessions_user_id")
+  @@map("sessions")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model User {
+  id                        String    @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  github_id                 BigInt    @unique
+  login                     String    @db.VarChar(100)
+  name                      String    @default("") @db.VarChar(200)
+  avatar_url                String    @default("") @db.VarChar(500)
+  email                     String    @default("") @db.VarChar(320)
+  github_token_enc          String?
+  github_token_expires_at   DateTime? @db.Timestamptz(6)
+  github_refresh_enc        String?
+  github_refresh_expires_at DateTime? @db.Timestamptz(6)
+  llm_base_url              String    @default("") @db.VarChar(500)
+  llm_model                 String    @default("") @db.VarChar(200)
+  llm_api_key_enc           String?
+  created_at                DateTime  @default(now()) @db.Timestamptz(6)
+  last_login_at             DateTime  @default(now()) @db.Timestamptz(6)
+  projects                  Project[]
+  runs                      Run[]
+  sessions                  Session[]
+
+  @@map("users")
+}

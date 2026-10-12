@@ -153,11 +153,10 @@ def test_pipeline_learns_main_and_hands_candidates_to_the_agent(settings, sf, tm
         "checks": [{"id": "builtin:no-duplicate-types", "status": "fail", "note": "TripShare"},
                    {"id": "structure-convention", "status": "pass"}],
     }
-    settings.llm_mode = "deepseek"
     prompts = []
     for _ in range(2):
         llm = FakeLLM([[tool_call("submit_report", report)]])
-        rid = make_run(sf, llm_mode="deepseek", dry_run=True)
+        rid = make_run(sf, dry_run=True)
         execute_run(rid, settings, sf, gh=gh, llm_factory=lambda _c, llm=llm: llm, checkout=checkout,
                     base_tree=lambda root, branch, token: DirTree(main))
         prompts.append(llm.first_user_prompt)
@@ -190,8 +189,7 @@ def test_checks_switched_off_leave_no_section(settings, sf, tmp_path):
         p.settings = {"checks": {"no-duplicate-types": False, "structure-convention": False}}
         s.commit()
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    settings.llm_mode = "deepseek"
-    execute_run(make_run(sf, llm_mode="deepseek"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
+    execute_run(make_run(sf), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
                 checkout=fake_checkout)
     assert "(none enabled)" in llm.first_user_prompt and "builtin:" not in llm.first_user_prompt
 

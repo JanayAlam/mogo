@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@/lib/auth', async (orig) => (await import('./signed-in')).signedIn(await orig()))
 vi.mock('@/lib/projects', () => ({ getRepo: vi.fn() }))
 
 import { POST as relearn } from '@/app/api/repos/[id]/profile/route'
@@ -23,6 +24,7 @@ describe('POST /api/repos/:id/profile', () => {
     vi.mocked(projects.getRepo).mockResolvedValue({ id: 'r1', full_name: 'acme/api' } as never)
     expect((await relearn(new Request('http://x', { method: 'POST' }), ctx('r1'))).status).toBe(202)
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).inputs).toEqual({ profile_repo_id: 'r1' })
+    expect(projects.getRepo).toHaveBeenCalledWith('r1', 'u1') // only the signed-in user's repos
   })
   it('404s for an unknown repo and 502s when dispatch fails', async () => {
     vi.mocked(projects.getRepo).mockResolvedValueOnce(null)

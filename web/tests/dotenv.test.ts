@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { parseEnv } from '@/lib/dotenv'
 
-const FILE = `﻿# antrotrip-server
+const FILE = `﻿# api
 NODE_ENV=development
 export PORT=8000
 DATABASE_URL="postgres://u:p#ss@db:5432/dev?sslmode=require"

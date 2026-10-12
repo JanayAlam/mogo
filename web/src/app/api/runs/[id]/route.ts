@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
 
+import { authed } from '@/lib/auth'
+import { type IdParams, notFound } from '@/lib/http'
 import { getRun } from '@/lib/runs'
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  const run = await getRun(id)
-  if (!run) return NextResponse.json({ detail: 'run not found' }, { status: 404 })
-  return NextResponse.json(run)
-}
+export const GET = authed(async (user, _req, { params }: IdParams) => {
+  const run = await getRun((await params).id, user.id)
+  return run ? NextResponse.json(run) : notFound('run')
+})

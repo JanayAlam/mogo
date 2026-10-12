@@ -16,8 +16,9 @@ from mogo.agent.tools import ToolBox
 from mogo.checks import CheckContext, CheckOutcome, enabled_checks, render_section, run_checks
 from mogo.config import RepoConfig, Settings
 from mogo.context import ContextError, RunContext, load_context
+from mogo.github.app import repo_token as app_repo_token
 from mogo.github.client import GitHubClient, GitHubError, parse_pr_url
-from mogo.llm.provider import make_client, resolve_llm
+from mogo.llm.provider import LLMUnavailable, make_client, resolve_llm
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
 from mogo.profile.build import GitTree, Tree
@@ -57,7 +58,6 @@ class _Recorder:
 
 
 CONVENTION_FILE_LIMIT = 20000
-SEEDS_DIR = Path(__file__).resolve().parents[3] / "seeds"  # fixtures that `prepare` commands may copy in
 
 
 def _read_conventions(root: Path, names: list[str]) -> str:
@@ -103,10 +103,10 @@ def _builtin_checks(
 def execute_run(
     run_id: str, settings: Settings, sf: sessionmaker,
     gh: GitHubClient | None = None, llm_factory=None, checkout=sandbox.checkout_pr, base_tree=git_base_tree,
+    token_for=None,
 ) -> None:
     set_run_context(run_id)
     rec = _Recorder(sf, run_id)
-    gh = gh or GitHubClient(settings.github_token)
     workdir = Path(tempfile.mkdtemp(prefix="mogo-"))
     app: sandbox.AppProcess | None = None
     cfg: RepoConfig | None = None
@@ -114,7 +114,7 @@ def execute_run(
     try:
         with sf() as s:
             run = s.get(Run, run_id)
-            pr_url, mode, dry = run.pr_url, run.llm_mode, run.dry_run
+            pr_url, dry = run.pr_url, run.dry_run
         rec.update(status="running")
 
         owner, repo_name, number = parse_pr_url(pr_url)
@@ -126,6 +126,18 @@ def execute_run(
         if cfg.name.lower() != f"{owner}/{repo_name}".lower():
             raise RunFailed(f"PR belongs to {owner}/{repo_name}, but the feature lists it under {cfg.name}")
 
+        # The project owner's LLM, checked before anything slow.
+        try:
+            choice = resolve_llm(ctx.owner, settings.mogo_secret_key)
+        except LLMUnavailable as e:
+            raise RunFailed(str(e)) from e
+        rec.update(llm_used=choice.label)
+        rec(f"using LLM {choice.label}")
+
+        # Reads the repo and posts the review as the Mogo App (mogo[bot]), scoped to this one repo for an hour.
+        token = (token_for or app_repo_token)(settings, owner, repo_name, ctx.installation_id)
+        gh = gh or GitHubClient(token)
+
         # The repo's commands see only its own env and secrets; the runner's credentials stay out (sandbox.scrubbed_env).
         if ctx.legacy_env_from:
             rec("env_from is no longer read (runner secrets are for the runner only); add these under Secrets on "
@@ -134,7 +146,7 @@ def execute_run(
         for problem in secret_problems:
             rec(f"repo secret unavailable: {problem}", "warn")
         repo_env = {**ctx.env, **stored}  # a sensitive value wins over a plain one with the same name
-        rec.redact = Redactor(stored.values())
+        rec.redact = Redactor([*stored.values(), choice.api_key, token])
         if stored:
             rec(f"repo secrets: {', '.join(sorted(stored))}")
 
@@ -145,14 +157,10 @@ def execute_run(
         diff = gh.get_diff(owner, repo_name, number)
         rec(f"PR #{number} '{pr['title']}': {len(diff)} bytes of diff")
 
-        choice = resolve_llm(settings, mode)
-        rec.update(llm_used=choice.label)
-        rec(f"using LLM {choice.label}")
-
         root = workdir / "repo"
-        checkout(owner, repo_name, number, settings.github_token, root)
+        checkout(owner, repo_name, number, token, root)
         rec("checked out PR branch")
-        builtin = _builtin_checks(rec, sf, ctx, gh, root, diff, owner, repo_name, settings.github_token, base_tree)
+        builtin = _builtin_checks(rec, sf, ctx, gh, root, diff, owner, repo_name, token, base_tree)
 
         setup = cfg.setup
         if not setup and (detected := install_command({p.name for p in root.iterdir()})):
@@ -173,7 +181,6 @@ def execute_run(
         if gates:
             rec(f"gates: {sum(g.ok for g in gates)}/{len(gates)} passed")
 
-        cmd_env = {**repo_env, "MOGO_SEEDS_DIR": str(SEEDS_DIR)}
         app_status = "not started (review only)" if not feature else "no start command configured"
         if feature and cfg.start:
             if cfg.services_cmd:
@@ -183,7 +190,7 @@ def execute_run(
                     rec(f"services failed: {sandbox.tail(out, 500)}", "warn")
             prepared = True
             for cmd in cfg.prepare:
-                code, out = sandbox.run_cmd(cmd, root, env=cmd_env)
+                code, out = sandbox.run_cmd(cmd, root, env=repo_env)
                 if code:
                     prepared = False
                     app_status = f"NOT started: prepare step `{cmd}` failed:\n{sandbox.tail(out, 1200)}"
@@ -209,7 +216,7 @@ def execute_run(
             gates=gates, app_status=app_status, notes=cfg.notes, project=ctx, builtin=builtin,
         )
         client = (llm_factory or make_client)(choice)
-        report = run_agent(client, choice.model, SYSTEM, rec.redact(user), ToolBox(root, cmd_env, rec.redact), settings.max_agent_steps)
+        report = run_agent(client, choice.model, SYSTEM, rec.redact(user), ToolBox(root, repo_env, rec.redact), settings.max_agent_steps)
         rec(f"agent done: {len(report.criteria)} criteria, {len(report.findings)} findings")
 
         inline, general = split_findings(report.findings, diff)

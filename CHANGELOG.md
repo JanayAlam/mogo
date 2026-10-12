@@ -8,6 +8,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- Users: sign in with GitHub through the Mogo GitHub App; the first sign-in creates the user (`users`, `sessions`,
+  migration 005). Each project belongs to one user, and every API route only sees the signed-in user's projects,
+  repos, features and runs.
+- Reviews are posted by the GitHub App (`mogo[bot]`) with an installation token per run, scoped to the one repo
+  (Contents: read, Pull requests: write). The repo picker lists repos of installations the user can access; access
+  is checked again before each run, and the App's webhook marks repos it no longer covers.
+- Each user sets their own LLM under Settings: any OpenAI-compatible base URL, model, and an API key stored encrypted
+  (write-only). Runs use the project owner's LLM.
+
 - Projects: group repos into a project, give each repo a free-text role (`backend`, `frontend`, `admin-frontend`, ...)
   and a source of truth branch. Repo settings (commands, env, conventions, notes) are edited in the web app
   and stored in Postgres (`projects`, `repos`, `repo_profiles`, `features`, `feature_repos`; `db/migrations/002_projects.sql`).
@@ -63,9 +72,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Changed
 
+- **Breaking:** migration 005 deletes all existing projects, repos, features and runs (they had no owner).
+- **Breaking:** `APP_PASSWORD`, `AUTH_DISABLED`, `/api/login` and `/api/logout` are removed (now `/api/auth/*`).
+  The runner's `AGENT_GITHUB_TOKEN` is replaced by the Actions secrets `MOGO_APP_ID` and `MOGO_APP_PRIVATE_KEY`.
+  `LLM_MODE`, `DEEPSEEK_*`, `LOCAL_LLM_*`, the per-run LLM choice (`runs.llm_mode`) and the CLI's `--llm` are gone.
+- `python -m mogo.tools.import_repos` needs `--owner <github login>`.
+- Removed the Antrotrip seed fixtures (`seeds/`) and `$MOGO_SEEDS_DIR`: Mogo ships no project-specific data. A repo that
+  needs fixtures keeps them in its own tree and runs them from `prepare`.
+- The web app uses Prisma 7 (driver adapter `@prisma/adapter-pg`) instead of postgres.js. `db/migrations` stays the
+  source of truth; `web/prisma/schema.prisma` is pulled from it (`pnpm db:pull`).
 - The runner reads repo settings from the database; `repos.yaml` (removed), `REPOS_FILE` and the web `ALLOWED_REPOS` allow-list are gone.
   `POST /api/runs` is replaced by `POST /api/features/:id/runs` and `POST /api/runs/:id/rerun`.
-- Without `APP_PASSWORD` there is no login screen outside production.
 - A repo's environment comes only from its settings (env and secrets). `env_from` is removed and the workflow no longer
   hands the runner every Actions secret (`MOGO_SECRETS_JSON`): runner secrets are for the runner. Runs and the repo page
   list leftover `env_from` names to re-enter as secrets.

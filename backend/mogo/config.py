@@ -16,18 +16,14 @@ ENV_FILE = BACKEND_DIR / ".env"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore", hide_input_in_errors=True)  # errors never echo secrets
 
-    github_token: str = ""
-
-    llm_mode: str = "auto"  # auto | local | deepseek
-    deepseek_api_key: str = ""
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
-    local_llm_base_url: str = ""
-    local_llm_model: str = ""
+    # The Mogo GitHub App: reads the user's repos and posts reviews as mogo[bot]. LLMs are configured per user.
+    github_app_id: str = ""
+    github_app_private_key: str = ""  # the .pem contents (one line with literal \n, or base64 also accepted)
+    github_app_slug: str = ""  # github.com/apps/<slug>; only for "install Mogo" links in errors
 
     database_url: str  # required: Supabase Postgres connection string (pooler URL)
     sentry_dsn: str = ""
-    mogo_secret_key: str = ""  # base64, 32 bytes: decrypts repo secrets entered in the web app
+    mogo_secret_key: str = ""  # base64, 32 bytes: decrypts repo secrets and users' LLM keys entered in the web app
     environment: str  # required: set ENVIRONMENT (e.g. dev, staging, production)
     log_level: str = "INFO"
 

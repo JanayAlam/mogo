@@ -1,46 +1,24 @@
-export const COOKIE = "mogo_session";
-export const COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
+import { fail } from '@/lib/http'
+import { COOKIE, readCookie } from '@/lib/session-cookie'
+import { type SessionUser, userForToken } from '@/lib/sessions'
 
-async function hmacHex(secret: string, msg: string): Promise<string> {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(msg));
-  return Array.from(new Uint8Array(sig), (b) =>
-    b.toString(16).padStart(2, "0"),
-  ).join("");
+/**
+ * Sign-in is GitHub only (app/api/auth/github). The proxy only checks that a session cookie is there; route handlers
+ * check it against the database through `authed`, so a deleted session or user stops working at once.
+ */
+export { COOKIE, COOKIE_MAX_AGE, cookieOptions, readCookie } from '@/lib/session-cookie'
+export type { SessionUser } from '@/lib/sessions'
+
+export async function currentUser(req: Request): Promise<SessionUser | null> {
+  const token = readCookie(req, COOKIE)
+  return token ? userForToken(token) : null
 }
 
-export function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-export const sessionToken = (password: string) =>
-  hmacHex(password, "mogo-session");
-
-export function checkPassword(input: string): boolean {
-  const pw = process.env.APP_PASSWORD;
-  return !!pw && safeEqual(input, pw);
-}
-
-/** No APP_PASSWORD means no login, except in production, which stays closed unless AUTH_DISABLED=true. */
-export function loginRequired(): boolean {
-  if (process.env.APP_PASSWORD) return true;
-  return process.env.NODE_ENV === "production" && process.env.AUTH_DISABLED !== "true";
-}
-
-export async function isAuthorized(
-  cookieValue: string | undefined,
-): Promise<boolean> {
-  const pw = process.env.APP_PASSWORD;
-  if (!pw) return !loginRequired();
-  return !!cookieValue && safeEqual(cookieValue, await sessionToken(pw));
+/** Wraps a route handler: 401 without a valid session, else the handler gets the user first. */
+export function authed<A extends unknown[]>(handler: (user: SessionUser, req: Request, ...rest: A) => Promise<Response>) {
+  return async (req: Request, ...rest: A): Promise<Response> => {
+    const user = await currentUser(req)
+    if (!user) return fail(401, 'unauthorized')
+    return handler(user, req, ...rest)
+  }
 }

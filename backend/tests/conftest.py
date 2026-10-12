@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from mogo.config import RepoConfig, Settings
-from mogo.models import Project, Repo, RepoEnvVar, make_session_factory
+from mogo.models import Project, Repo, RepoEnvVar, User, make_session_factory
 
 
 FAKE_DB_URL = "postgresql://user:pw@localhost:5432/db"
@@ -12,11 +12,20 @@ FAKE_DB_URL = "postgresql://user:pw@localhost:5432/db"
 
 @pytest.fixture
 def settings():
-    return Settings(
-        _env_file=None, environment="test", github_token="gh-test", deepseek_api_key="ds-key",
-        local_llm_base_url="http://localhost:11434/v1", local_llm_model="qwen",
-        database_url=FAKE_DB_URL,
-    )
+    return Settings(_env_file=None, environment="test", database_url=FAKE_DB_URL)
+
+
+@pytest.fixture(autouse=True)
+def fake_app_token(monkeypatch):
+    """No test talks to GitHub for an installation token; the requested (owner, repo, installation) are recorded."""
+    calls = []
+
+    def token(_settings, owner, repo, installation_id=None):
+        calls.append((owner, repo, installation_id))
+        return "app-token"
+    monkeypatch.setattr("mogo.runner.pipeline.app_repo_token", token)
+    monkeypatch.setattr("mogo.profile.job.app_repo_token", token)
+    return calls
 
 
 @pytest.fixture
@@ -25,12 +34,25 @@ def sf(tmp_path):
     return make_session_factory(f"sqlite:///{tmp_path / 'test.db'}")
 
 
+def seed_user(sf, login="alice", **llm) -> str:
+    """A signed-in user with an LLM set up (DeepSeek, no key stored). Returns the user id."""
+    with sf() as s:
+        if u := s.query(User).filter_by(login=login).first():
+            return u.id
+        u = User(github_id=abs(hash(login)) % 10**9, login=login,
+                 **{"llm_base_url": "https://api.deepseek.com", "llm_model": "deepseek-chat", **llm})
+        s.add(u)
+        s.commit()
+        return u.id
+
+
 def seed_repos(sf, cfgs, project="Acme", roles=None, env=None):
     """Store repo settings the way the web app does. `env`: {owner/repo: {NAME: plain value}}.
     Returns {owner/repo: repo id}."""
     roles, env = roles or {}, env or {}
+    owner_id = seed_user(sf)
     with sf() as s:
-        p = Project(name=project, description="Acme shop")
+        p = Project(owner_id=owner_id, name=project, description="Acme shop")
         s.add(p)
         s.flush()
         rows = [Repo(project_id=p.id, full_name=c.name, role=roles.get(c.name, ""), config=c.model_dump(exclude={"name"}))

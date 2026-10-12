@@ -85,9 +85,8 @@ def test_runner_installs_from_the_lockfile_when_no_override(settings, sf, tmp_pa
         fake_checkout(*a)
         a[-1].joinpath("requirements.txt").write_text("")  # empty: the detected install has nothing to do
     seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
-    settings.llm_mode = "deepseek"
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    execute_run(make_run(sf, llm_mode="deepseek"), settings, sf, gh=fake_github([]),
+    execute_run(make_run(sf), settings, sf, gh=fake_github([]),
                 llm_factory=lambda _c: llm, checkout=checkout)
     with sf() as s:
         msgs = [e.message for e in s.query(RunEvent)]
@@ -99,7 +98,9 @@ def test_import_puts_yaml_env_into_plain_variables(sf, tmp_path):
     from mogo.tools.import_repos import import_repos
     f = tmp_path / "repos.yaml"
     f.write_text("repos:\n  - name: acme/api\n    env: {PORT: 8000, MODE: test}\n")
-    import_repos(sf, f, "Acme")
+    from conftest import seed_user
+    seed_user(sf)
+    import_repos(sf, f, "Acme", "alice")
     with sf() as s:
         rows = {r.name: (r.sensitive, r.value) for r in s.query(RepoEnvVar)}
     assert rows == {"PORT": (False, "8000"), "MODE": (False, "test")}

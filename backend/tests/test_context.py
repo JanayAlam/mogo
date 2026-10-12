@@ -6,7 +6,7 @@ from mogo.context import ContextError, load_context
 from mogo.models import Feature, FeatureRepo, Project, Repo, Run
 from mogo.runner.pipeline import execute_run
 from mogo.tools.import_repos import import_repos
-from conftest import FakeLLM, seed_repos, tool_call
+from conftest import FakeLLM, seed_repos, seed_user, tool_call
 from test_pipeline import fake_checkout, fake_github
 
 API = "https://github.com/acme/api/pull/1"
@@ -24,7 +24,7 @@ def make_feature(sf, ids, api_url=API):
                           requirements="Refund button on order page")
         s.add_all([api, web])
         s.flush()
-        run = Run(feature_repo_id=api.id, repo="acme/api", pr_url=api_url, pr_number=1, llm_mode="deepseek")
+        run = Run(feature_repo_id=api.id, repo="acme/api", pr_url=api_url, pr_number=1)
         s.add(run)
         s.commit()
         return run.id
@@ -48,7 +48,6 @@ def test_feature_context_has_requirements_and_siblings(sf, two_repos):
 def test_feature_details_reach_the_agent(settings, sf, two_repos):
     rid = make_feature(sf, two_repos)
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    settings.llm_mode = "deepseek"
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     p = llm.first_user_prompt
     assert "This repo: acme/api (role: backend)" in p and "Description: Acme shop" in p
@@ -68,7 +67,7 @@ def test_pr_from_another_repo_is_refused(settings, sf, two_repos):
 
 def test_invalid_stored_settings_are_reported(sf):
     with sf() as s:
-        p = Project(name="X")
+        p = Project(owner_id=seed_user(sf), name="X")
         s.add(p)
         s.flush()
         s.add(Repo(project_id=p.id, full_name="acme/api", config={"gates": "pnpm lint"}))  # must be a list
@@ -82,7 +81,8 @@ def test_import_reports_env_from_instead_of_storing_it(sf, tmp_path):
     f = tmp_path / "repos.yaml"
     f.write_text("repos:\n  - name: acme/api\n    env_from: {DATABASE_URL: ACME_DB, SMTP: SMTP}\n")
     warnings = []
-    import_repos(sf, f, "Acme", warn=warnings.append)
+    seed_user(sf)
+    import_repos(sf, f, "Acme", "alice", warn=warnings.append)
     with sf() as s:
         assert "env_from" not in s.query(Repo).one().config
     assert warnings == ["acme/api: env_from is not imported; add under Secrets on the repo page: DATABASE_URL, SMTP"]
@@ -91,9 +91,10 @@ def test_import_reports_env_from_instead_of_storing_it(sf, tmp_path):
 def test_import_repos_is_idempotent(sf, tmp_path):
     f = tmp_path / "repos.yaml"
     f.write_text("repos:\n  - name: acme/api\n    role: backend\n    gates: [make lint]\n")
-    assert import_repos(sf, f, "Acme") == ["acme/api"]
+    seed_user(sf)
+    assert import_repos(sf, f, "Acme", "alice") == ["acme/api"]
     f.write_text("repos:\n  - name: acme/api\n    role: backend\n    gates: [make check]\n")
-    import_repos(sf, f, "acme", "Shop")
+    import_repos(sf, f, "acme", "ALICE", "Shop")
     with sf() as s:
         (p,), (r,) = s.query(Project).all(), s.query(Repo).all()
         assert (p.description, r.role, r.config["gates"]) == ("Shop", "backend", ["make check"])

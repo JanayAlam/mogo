@@ -4,7 +4,7 @@ import { Plus } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useRouter } from "nextjs-toploader/app";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { ItemCardsSkeleton, ProjectSkeleton } from "@/components/skeletons";
@@ -13,6 +13,7 @@ import {
   Chip,
   ConfirmButton,
   ErrorText,
+  errorMessage,
   Eyebrow,
   Field,
   Modal,
@@ -30,7 +31,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { BUILTIN_CHECKS, checkEnabled } from "@/lib/checks";
-import { api, type Project } from "@/lib/client";
+import { api, type InstalledRepo, type Project } from "@/lib/client";
 import { ROLE_SUGGESTIONS } from "@/lib/repo-form";
 import { type ReviewState, runState } from "@/lib/status";
 
@@ -266,6 +267,17 @@ function AddRepoModal({
   const [role, setRole] = useState("");
   const [branch, setBranch] = useState("main");
   const action = useAction();
+  const [installed, setInstalled] = useState<InstalledRepo[] | null>(null);
+  const [listError, setListError] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    api.installedRepos().then(setInstalled, (e) => setListError(errorMessage(e)));
+  }, [open]);
+  const pick = (name: string) => {
+    setFullName(name);
+    const r = installed?.find((x) => x.full_name.toLowerCase() === name.trim().toLowerCase());
+    if (r) setBranch(r.default_branch);
+  };
   // Pages stay mounted in the background after navigating away, so the dialog must clear itself.
   const close = () => {
     setFullName("");
@@ -279,7 +291,7 @@ function AddRepoModal({
       open={open}
       onClose={close}
       title="Add repository"
-      description="Settings are read from its source branch and suggested on the next screen.">
+      description="Repos where you installed the Mogo GitHub App. Settings are read from the source branch and suggested on the next screen.">
       <form
         className="space-y-4"
         onSubmit={(e) => {
@@ -294,16 +306,39 @@ function AddRepoModal({
             onAdded(id, learning);
           });
         }}>
-        <Field label="Repository" htmlFor="r-name">
+        <Field
+          label="Repository"
+          htmlFor="r-name"
+          hint={
+            <>
+              {listError ||
+                (installed === null
+                  ? "Loading your repos…"
+                  : `${installed.length} repo${installed.length === 1 ? "" : "s"} available.`)}{" "}
+              <a
+                className="underline underline-offset-2"
+                href={`/api/auth/github/install?next=${encodeURIComponent(`/projects/${projectId}`)}`}>
+                Install Mogo on more repos
+              </a>
+            </>
+          }>
           <Input
             id="r-name"
             className="font-mono"
             required
+            list="r-name-installed"
             value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            placeholder="org/repo or https://github.com/org/repo"
+            onChange={(e) => pick(e.target.value)}
+            placeholder="org/repo"
             autoFocus
           />
+          <datalist id="r-name-installed">
+            {installed?.map((r) => (
+              <option key={r.full_name} value={r.full_name}>
+                {r.private ? "private" : "public"}
+              </option>
+            ))}
+          </datalist>
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Role" htmlFor="r-role">

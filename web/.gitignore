@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# prisma client, generated from prisma/schema.prisma (pnpm install runs prisma generate)
+/src/generated/

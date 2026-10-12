@@ -136,7 +136,8 @@ def test_git_tree_reads_another_commit_without_checkout(tmp_path):
 def test_profile_is_cached_per_commit(sf, tmp_path):
     (tmp_path / "a.ts").write_text("export interface A { a: string }")
     with sf() as s:
-        p = Project(name="P")
+        from conftest import seed_user
+        p = Project(owner_id=seed_user(sf), name="P")
         s.add(p)
         s.flush()
         r = Repo(project_id=p.id, full_name="a/b")

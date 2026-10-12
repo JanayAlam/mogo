@@ -33,40 +33,37 @@ jobs:
       # Names only, never values: says which settings reached the job and which sit in the wrong tab.
       - name: Check configuration
         env:
-          S_AGENT_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN != '' }}
+          S_MOGO_APP_ID: ${{ secrets.MOGO_APP_ID != '' }}
+          S_MOGO_APP_PRIVATE_KEY: ${{ secrets.MOGO_APP_PRIVATE_KEY != '' }}
           S_DATABASE_URL: ${{ secrets.DATABASE_URL != '' }}
-          S_DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY != '' }}
-          S_LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL != '' }}
           S_MOGO_SECRET_KEY: ${{ secrets.MOGO_SECRET_KEY != '' }}
-          V_AGENT_GITHUB_TOKEN: ${{ vars.AGENT_GITHUB_TOKEN != '' }}
+          V_MOGO_APP_ID: ${{ vars.MOGO_APP_ID != '' }}
+          V_MOGO_APP_PRIVATE_KEY: ${{ vars.MOGO_APP_PRIVATE_KEY != '' }}
           V_DATABASE_URL: ${{ vars.DATABASE_URL != '' }}
-          V_DEEPSEEK_API_KEY: ${{ vars.DEEPSEEK_API_KEY != '' }}
-          V_LOCAL_LLM_BASE_URL: ${{ vars.LOCAL_LLM_BASE_URL != '' }}
           V_MOGO_SECRET_KEY: ${{ vars.MOGO_SECRET_KEY != '' }}
         run: |
           missing=0
-          for n in AGENT_GITHUB_TOKEN DATABASE_URL DEEPSEEK_API_KEY LOCAL_LLM_BASE_URL MOGO_SECRET_KEY; do
+          for n in MOGO_APP_ID MOGO_APP_PRIVATE_KEY DATABASE_URL MOGO_SECRET_KEY; do
             s="S_$n"; v="V_$n"
             if [ "${!s}" = "true" ]; then echo "ok       secret $n"
             elif [ "${!v}" = "true" ]; then echo "::error::$n is under the Variables tab; move it to the Secrets tab"; missing=1
-            else echo "missing  secret $n"; fi
+            else echo "::error::$n must be a repository secret (Settings > Secrets and variables > Actions > Secrets)"; missing=1; fi
           done
-          [ "$S_DATABASE_URL" = "true" ] && [ "$S_AGENT_GITHUB_TOKEN" = "true" ] || { echo "::error::DATABASE_URL and AGENT_GITHUB_TOKEN must be repository secrets (Settings > Secrets and variables > Actions > Secrets)"; missing=1; }
           exit $missing
       - name: Run agent
         working-directory: backend
         env:
           RUN_ID: ${{ inputs.run_id }}
           PROFILE_REPO_ID: ${{ inputs.profile_repo_id }}
-          GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          # The Mogo GitHub App: per-repo tokens to read the PR and post the review as mogo[bot].
+          # (Actions names cannot start with GITHUB_, hence MOGO_APP_* here.)
+          GITHUB_APP_ID: ${{ secrets.MOGO_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.MOGO_APP_PRIVATE_KEY }}
+          GITHUB_APP_SLUG: ${{ vars.MOGO_APP_SLUG }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          # Decrypts repo secrets entered in the web app; same value as MOGO_SECRET_KEY on Vercel.
+          # Decrypts repo secrets and users' LLM keys entered in the web app; same value as MOGO_SECRET_KEY on Vercel.
           MOGO_SECRET_KEY: ${{ secrets.MOGO_SECRET_KEY }}
-          # Optional: a tunnel URL (Tailscale / cloudflared) to your local LLM server.
-          LOCAL_LLM_BASE_URL: ${{ secrets.LOCAL_LLM_BASE_URL }}
-          LOCAL_LLM_MODEL: ${{ vars.LOCAL_LLM_MODEL || secrets.LOCAL_LLM_MODEL }}
           ENVIRONMENT: actions
         run: |
           if [ -n "$PROFILE_REPO_ID" ]; then python -m mogo.runner --profile "$PROFILE_REPO_ID"

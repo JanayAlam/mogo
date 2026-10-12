@@ -8,5 +8,4 @@ COPY backend/pyproject.toml .
 RUN mkdir mogo && touch mogo/__init__.py && pip install --no-cache-dir -e .
 COPY backend/ .
 COPY db/ /app/db/
-COPY seeds/ /app/seeds/
 ENTRYPOINT ["python", "-m", "mogo.runner"]

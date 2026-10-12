@@ -1,8 +1,34 @@
 import * as Sentry from '@sentry/nextjs'
 
 import { dispatchWorkflow } from '@/lib/github'
+import { installedRepos } from '@/lib/github-app'
 import { logger } from '@/lib/log'
+import { setRepoInstallation } from '@/lib/projects'
 import { insertRun, markRunFailed, type RunRow } from '@/lib/runs'
+import { getLlmSettings, llmConfigured } from '@/lib/users'
+
+/** Why runs cannot start for this user, or null. Checked before anything is queued. */
+export async function startProblem(userId: string, repos: string[]): Promise<string | null> {
+  if (!llmConfigured(await getLlmSettings(userId))) return 'set up your LLM first (Settings > LLM)'
+  const lost = await recheckAccess(userId, repos)
+  if (lost.length) return `Mogo is no longer installed on ${lost.join(', ')}, or your GitHub account lost access`
+  return null
+}
+
+/**
+ * Access is checked when a repo is added, and again before each run: the user may have left the org, or the App
+ * may have been removed from the repo. Stores the installation that covers each repo now. Returns the lost repos.
+ */
+async function recheckAccess(userId: string, repos: string[]): Promise<string[]> {
+  const installed = new Map((await installedRepos(userId)).map((r) => [r.full_name.toLowerCase(), r.installation_id]))
+  const lost: string[] = []
+  for (const name of new Set(repos)) {
+    const id = installed.get(name.toLowerCase()) ?? null
+    await setRepoInstallation(userId, name, id)
+    if (id === null) lost.push(name)
+  }
+  return lost
+}
 
 /** Stores a queued run and starts the workflow. A failed dispatch marks the run failed and returns the error. */
 export async function queueRun(input: Parameters<typeof insertRun>[0]): Promise<{ run: RunRow; error?: string }> {

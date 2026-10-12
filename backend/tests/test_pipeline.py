@@ -4,7 +4,8 @@ import json
 import httpx
 
 from mogo.github.client import GitHubClient
-from mogo.models import Run
+from mogo.config import RepoConfig
+from mogo.models import Repo, Run
 from mogo.runner.pipeline import execute_run
 from conftest import FakeLLM, seed_repos, tool_call
 
@@ -63,19 +64,18 @@ REPORT = {
 
 def run(settings, repos, sf, gh, run_id):
     llm = FakeLLM([[tool_call("read_file", {"path": "src/svc.ts"})], [tool_call("submit_report", REPORT, "c2")]])
-    settings.llm_mode = "deepseek"
     execute_run(run_id, settings, sf, gh=gh, llm_factory=lambda _c: llm, checkout=fake_checkout)
 
 
 def test_full_run_posts_inline_and_general(settings, repos, sf):
     posted = []
-    rid = run_id = make_run(sf, feature="thing works", llm_mode="deepseek")
+    rid = run_id = make_run(sf, feature="thing works")
     run(settings, repos, sf, fake_github(posted), run_id)
 
     with sf() as s:
         r = s.get(Run, rid)
         assert r.status == "succeeded", r.error
-        assert r.llm_used == "deepseek:deepseek-chat" and r.review_url.endswith("#review")
+        assert r.llm_used == "deepseek-chat @ api.deepseek.com" and r.review_url.endswith("#review")
         assert r.verdict == "ok" and any("review posted" in e.message for e in r.events)
     review = posted[0]
     assert review["event"] == "COMMENT" and review["commit_id"] == "abc"
@@ -85,7 +85,7 @@ def test_full_run_posts_inline_and_general(settings, repos, sf):
 
 def test_dry_run_posts_nothing(settings, repos, sf):
     posted = []
-    rid = make_run(sf, dry_run=True, llm_mode="deepseek")
+    rid = make_run(sf, dry_run=True)
     run(settings, repos, sf, fake_github(posted), rid)
     assert posted == []
     with sf() as s:
@@ -94,13 +94,13 @@ def test_dry_run_posts_nothing(settings, repos, sf):
 
 def test_inline_rejection_falls_back_to_summary(settings, repos, sf):
     posted = []
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     run(settings, repos, sf, fake_github(posted, fail_inline=True), rid)
     assert posted[0]["comments"] == [] and "Inline findings" in posted[0]["body"]
 
 
 def test_unconfigured_repo_fails_cleanly(settings, sf):
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     execute_run(rid, settings, sf, gh=fake_github([]), checkout=fake_checkout)
     with sf() as s:
         r = s.get(Run, rid)
@@ -108,7 +108,7 @@ def test_unconfigured_repo_fails_cleanly(settings, sf):
 
 
 def test_fork_pr_is_refused(settings, repos, sf, monkeypatch):
-    rid = make_run(sf, llm_mode="deepseek")
+    rid = make_run(sf)
     gh = fake_github([])
     monkeypatch.setitem(PR["head"], "repo", {"full_name": "evil/api"})
     execute_run(rid, settings, sf, gh=gh, checkout=fake_checkout)
@@ -124,9 +124,8 @@ def test_services_are_started_and_stopped_around_the_run(settings, sf, tmp_path)
         start="python3 -m http.server 8765", healthcheck="http://localhost:8765",
     )}
     seed_repos(sf, cfg)
-    rid = make_run(sf, feature="thing works", llm_mode="deepseek")
+    rid = make_run(sf, feature="thing works")
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    settings.llm_mode = "deepseek"
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     assert (tmp_path / "up").exists() and (tmp_path / "down").exists()
     with sf() as s:
@@ -150,16 +149,15 @@ def _boot_cfg(tmp_path, **kw):
 
 def _run_feature(settings, cfg, sf, llm, env=None):
     seed_repos(sf, cfg, env=env)
-    rid = make_run(sf, feature="thing works", llm_mode="deepseek")
-    settings.llm_mode = "deepseek"
+    rid = make_run(sf, feature="thing works")
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     return rid
 
 
-def test_prepare_runs_before_start_with_seeds_dir_and_notes_reach_the_agent(settings, sf, tmp_path):
+def test_prepare_runs_before_start_and_notes_reach_the_agent(settings, sf, tmp_path):
     cfg = _boot_cfg(
         tmp_path,
-        prepare=[f'test -d "$MOGO_SEEDS_DIR" && echo "$APP_MODE" > {tmp_path}/prepared'],
+        prepare=[f'echo "$APP_MODE" > {tmp_path}/prepared'],
         notes="ACCOUNT-NOTE: log in as traveler@seed.test",
     )
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
@@ -185,3 +183,24 @@ def test_ready_url_defaults_to_the_repo_port(settings, sf, tmp_path):
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
     _run_feature(settings, cfg, sf, llm, env={"acme/api": {"PORT": "8767"}})
     assert "running at http://localhost:8767 (it answered)" in llm.first_user_prompt
+
+
+def test_token_is_minted_for_the_repos_installation(settings, sf, fake_app_token):
+    ids = seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    with sf() as s:
+        s.get(Repo, ids["acme/api"]).installation_id = 77
+        s.commit()
+    run(settings, None, sf, fake_github([]), make_run(sf))
+    assert fake_app_token == [("acme", "api", 77)]
+
+
+def test_owner_without_llm_fails_before_touching_github(settings, sf, fake_app_token):
+    from conftest import seed_user
+    seed_user(sf, llm_model="")
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), checkout=fake_checkout)
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "failed" and "has not set up an LLM" in r.error
+    assert fake_app_token == []

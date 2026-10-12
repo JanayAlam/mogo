@@ -1,6 +1,6 @@
-import { sql } from '@/lib/db'
+import { Prisma } from '@/generated/prisma/client'
+import { db } from '@/lib/db'
 
-export type LlmMode = 'auto' | 'local' | 'deepseek'
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 
 export interface RunRow {
@@ -10,7 +10,6 @@ export interface RunRow {
   pr_url: string
   pr_number: number
   feature: string
-  llm_mode: LlmMode
   dry_run: boolean
   status: RunStatus
   llm_used: string
@@ -21,8 +20,20 @@ export interface RunRow {
   updated_at: string
 }
 
-const COLUMNS =
-  'id, feature_repo_id, repo, pr_url, pr_number, feature, llm_mode, dry_run, status, llm_used, verdict, review_url, error, created_at, updated_at'
+export const RUN_FIELDS = {
+  id: true, feature_repo_id: true, repo: true, pr_url: true, pr_number: true, feature: true, dry_run: true,
+  status: true, llm_used: true, verdict: true, review_url: true, error: true, created_at: true, updated_at: true,
+} satisfies Prisma.RunSelect
+
+export const toRunRow = (r: Prisma.RunGetPayload<{ select: typeof RUN_FIELDS }>): RunRow => ({
+  ...r,
+  status: r.status as RunStatus,
+  created_at: r.created_at.toISOString(),
+  updated_at: r.updated_at.toISOString(),
+})
+
+/** Runs the owner can see: those of features in their projects. */
+const owned = (ownerId: string): Prisma.RunWhereInput => ({ featureRepo: { feature: { project: { owner_id: ownerId } } } })
 
 export async function insertRun(r: {
   feature_repo_id: string | null
@@ -30,41 +41,42 @@ export async function insertRun(r: {
   pr_url: string
   pr_number: number
   feature: string
-  llm_mode: LlmMode
   dry_run: boolean
+  created_by: string
 }): Promise<RunRow> {
-  const db = sql()
-  const [row] = await db`
-    insert into runs (id, feature_repo_id, repo, pr_url, pr_number, feature, llm_mode, dry_run)
-    values (${crypto.randomUUID()}, ${r.feature_repo_id}, ${r.repo}, ${r.pr_url}, ${r.pr_number}, ${r.feature}, ${r.llm_mode}, ${r.dry_run})
-    returning ${db.unsafe(COLUMNS)}`
-  return row as unknown as RunRow
+  return toRunRow(await db().run.create({ data: r, select: RUN_FIELDS }))
 }
 
-export async function listRuns(limit = 50): Promise<RunRow[]> {
-  const db = sql()
-  const rows = await db`select ${db.unsafe(COLUMNS)} from runs order by created_at desc limit ${Math.min(limit, 200)}`
-  return rows as unknown as RunRow[]
+export async function listRuns(ownerId: string, limit = 50): Promise<RunRow[]> {
+  const rows = await db().run.findMany({
+    where: owned(ownerId), orderBy: { created_at: 'desc' }, take: Math.min(limit, 200), select: RUN_FIELDS,
+  })
+  return rows.map(toRunRow)
 }
 
-export async function getRun(id: string) {
-  const db = sql()
-  const [run] = await db`select ${db.unsafe(COLUMNS)}, result from runs where id = ${id}`
+export async function getRun(id: string, ownerId: string) {
+  const run = await db().run.findFirst({
+    where: { id, ...owned(ownerId) },
+    select: { ...RUN_FIELDS, result: true, events: { select: { ts: true, level: true, message: true }, orderBy: { id: 'asc' } } },
+  })
   if (!run) return null
-  const events = await db`select ts, level, message from run_events where run_id = ${id} order by id`
-  return { ...(run as unknown as RunRow & { result: unknown }), events }
+  const { result, events, ...row } = run
+  return { ...toRunRow(row), result, events }
 }
 
 export async function markRunFailed(id: string, error: string): Promise<void> {
-  await sql()`update runs set status = 'failed', error = ${error.slice(0, 2000)}, updated_at = now() where id = ${id}`
+  await db().run.update({ where: { id }, data: { status: 'failed', error: error.slice(0, 2000), updated_at: new Date() } })
 }
 
-export async function getStats(): Promise<{ projects: number; queued: number; failed: number; done: number }> {
-  const [row] = await sql()`
-    select (select count(*)::int from projects) as projects,
-      count(*) filter (where status in ('queued', 'running'))::int as queued,
-      count(*) filter (where status = 'failed' or verdict = 'changes_requested')::int as failed,
-      count(*) filter (where status = 'succeeded' and verdict <> 'changes_requested')::int as done
-    from runs where feature_repo_id is not null`
-  return row as never
+export async function getStats(
+  ownerId: string,
+): Promise<{ projects: number; queued: number; failed: number; done: number }> {
+  const mine = owned(ownerId)
+  const [projects, queued, failed, done] = await Promise.all([
+    db().project.count({ where: { owner_id: ownerId } }),
+    db().run.count({ where: { ...mine, status: { in: ['queued', 'running'] } } }),
+    db().run.count({ where: { ...mine, OR: [{ status: 'failed' }, { verdict: 'changes_requested' }] } }),
+    db().run.count({ where: { ...mine, status: 'succeeded', verdict: { not: 'changes_requested' } } }),
+  ])
+  return { projects, queued, failed, done }
 }

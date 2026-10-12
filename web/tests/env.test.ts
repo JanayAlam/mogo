@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@/lib/auth', async (orig) => (await import('./signed-in')).signedIn(await orig()))
 vi.mock('@/lib/projects', () => ({ getRepo: vi.fn() }))
 vi.mock('@/lib/env', async (orig) => ({
   ...(await orig<typeof import('@/lib/env')>()),

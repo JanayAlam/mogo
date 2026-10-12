@@ -5,13 +5,16 @@ You group repos (backend, frontend, admin, ...) into a project, describe a featu
 runs your linters and tests, exercises the feature over HTTP, reviews the diff against the repo's conventions,
 and posts a GitHub review with inline comments.
 
+Anyone can sign up with GitHub. Each user installs the Mogo GitHub App on the repos they want reviewed, sets up their
+own LLM (any OpenAI-compatible API), and Mogo posts its reviews there as `mogo[bot]`.
+
 ```
 web/ (Next.js on Vercel)  --projects, features, runs-->  Supabase Postgres  <--progress/result--+
         |                                                                         |
         +--workflow_dispatch--> GitHub Actions (run-agent.yml in the runner repo) +
                                   python -m mogo.runner <run_id>
                                   clone PR -> setup -> gates (tsc/eslint) -> boot app -> agent loop -> review
-                                  LLM: local server (via tunnel) if reachable, else DeepSeek
+                                  repo access: Mogo GitHub App token for that repo; LLM: the project owner's
 ```
 
 Vercel is serverless and cannot run the agent, so the web app only creates runs and starts the workflow.
@@ -24,7 +27,7 @@ through a CLI.
 - [Run locally](#run-locally)
 - [Deploy](#deploy)
 - [Environment variables](#environment-variables)
-- [Local LLM vs DeepSeek](#local-llm-vs-deepseek)
+- [The LLM](#the-llm)
 - [Troubleshooting](#troubleshooting)
 - [Safety](#safety) · [Observability](#observability) · [Layout](#layout)
 
@@ -93,10 +96,10 @@ into a project once instead of retyping them (entries may also set `role` and `d
 ```bash
 cd backend
 git show 0cd6fec:repos.yaml > /tmp/repos.yaml   # the last committed version, if the file is gone
-python -m mogo.tools.import_repos /tmp/repos.yaml --project "My product" --description "..."
+python -m mogo.tools.import_repos /tmp/repos.yaml --owner <your github login> --project "My product" --description "..."
 ```
 
-Re-running it updates the same project and repos by name.
+The owner must have signed in to the web app once. Re-running it updates the same project and repos by name.
 
 ### Environment variables
 
@@ -124,20 +127,10 @@ Coming from `env_from` (repo values kept in the runner repo's Actions secrets): 
 page list the names still configured; add their values here, save the repo page (which drops the old list), then
 delete those secrets from the runner repo.
 
-### Seed data
-
-`seeds/antrotrip-server/seed.ts` can fill a throwaway sandbox database with fixtures after migrations: 13 users (every login state), 5 businesses
-(VERIFIED, PENDING, REJECTED, UNVERIFIED, and a multi-member one), 15 listings (unclaimed, claimed, claim PENDING/REJECTED/resubmitted, and every
-review state), menus, and two trips. App users are passwordless, so the seed also arms the OTP `111111` for each of them in Valkey.
-`prepare` copies it into the checkout (`$MOGO_SEEDS_DIR` points at `seeds/`) and runs it with the target repo's own Prisma client.
-The seed is idempotent. It is **not** used for antrotrip-server right now: that repo runs against a shared development
-database, so its `prepare` only runs `prisma generate` (no migrations, no seed) and its `notes` tell the agent to
-only read, or create and clean up clearly labelled `mogo-test` data.
-
 ## Run locally
 
 Prerequisites: Python 3.11+ (with `python3-venv`), Node 22+, Git, and optionally Docker.
-You need a GitHub token, a DeepSeek key and/or a local LLM server (see below).
+You need the Mogo GitHub App ([Deploy](#2-the-mogo-github-app)) and an LLM set up in your account (web app, Settings).
 
 ### The agent (CLI, no web app needed)
 
@@ -145,7 +138,7 @@ You need a GitHub token, a DeepSeek key and/or a local LLM server (see below).
 cd backend
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-cp .env.example .env              # backend/.env (read from any folder): ENVIRONMENT, DATABASE_URL, GITHUB_TOKEN, ...
+cp .env.example .env              # backend/.env (read from any folder): ENVIRONMENT, DATABASE_URL, GITHUB_APP_*, ...
 pytest                            # offline, no database needed
 
 # the repo must be configured in a project (web app, or the importer above)
@@ -153,12 +146,12 @@ pytest                            # offline, no database needed
 # review + test a PR; --dry-run prints/stores the result without posting to GitHub
 python -m mogo.runner --pr https://github.com/org/backend/pull/12 \
   --feature "POST /orders with an empty cart returns 422 and creates no row" \
-  --llm auto --dry-run
+  --dry-run
 ```
 
 `python -m mogo.runner --profile <repo id>` re-learns a repo's conventions from its source of truth branch.
 
-Drop `--dry-run` to post the review. `--llm` is `auto`, `local` or `deepseek`. The exit code is 0 on success.
+Drop `--dry-run` to post the review. The run uses the LLM of the project's owner. The exit code is 0 on success.
 Run history and repo settings are stored in your Supabase database, so the CLI needs `DATABASE_URL` too.
 A CLI run has no feature record: `--feature` is the description and no sibling repos are shown to the agent.
 
@@ -167,15 +160,14 @@ For isolation, run it in the container (it has Git and Node for the target repos
 ```bash
 docker build -t mogo .
 docker run --rm --env-file backend/.env mogo --pr <url> --dry-run
-# local LLM on the host: LOCAL_LLM_BASE_URL=http://host.docker.internal:11434/v1
-#   and add --add-host=host.docker.internal:host-gateway on Linux
 ```
 
 #### Backend tests
 
 `pytest` runs fully offline (fake GitHub, fake LLM, throwaway sqlite file per test). The app itself only supports Postgres.
 The web app's SQL is Postgres-specific, so its one DB test (`web/tests/db.integration.test.ts`) only runs when
-`TEST_DATABASE_URL` points at a throwaway Postgres (it also covers projects, repos and features):
+`TEST_DATABASE_URL` points at a throwaway Postgres (it also covers users, sessions, and that one user cannot see
+another's projects):
 
 ```bash
 docker run -d --name mogo-pg -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=t -p 54329:5432 postgres:16-alpine
@@ -189,15 +181,20 @@ cd web && TEST_DATABASE_URL=postgresql://postgres:pw@localhost:54329/t pnpm test
 cd web
 corepack enable                   # once; gives you the pnpm version pinned in package.json
 pnpm install
-cp .env.example .env.local        # APP_PASSWORD, DATABASE_URL, GITHUB_TOKEN, RUNNER_REPO ...
+cp .env.example .env.local        # GITHUB_APP_CLIENT_ID/SECRET, DATABASE_URL, MOGO_SECRET_KEY, GITHUB_TOKEN, RUNNER_REPO ...
 pnpm dev                          # http://localhost:3000
 pnpm test                         # unit + route tests; set TEST_DATABASE_URL to include the Postgres test
 pnpm typecheck && pnpm lint && pnpm build
 ```
 
+The web app reads and writes the database through Prisma (`web/prisma/schema.prisma`, client generated into
+`web/src/generated/` by `pnpm install`). The schema itself is owned by `db/migrations/*.sql`, which the runner shares:
+after adding a migration, apply it (`python -m mogo.tools.migrate`) and run `pnpm db:pull` to refresh the Prisma
+schema. Do not use `prisma migrate` or `prisma db push`.
+
 Starting a check from the web app always dispatches the GitHub Actions workflow, so the runner repo from the
-[Deploy](#deploy) section must exist first. For a fully local loop use the CLI above. Without `APP_PASSWORD`
-there is no login screen; production stays closed unless `AUTH_DISABLED=true`.
+[Deploy](#deploy) section must exist first. For a fully local loop use the CLI above. Sign-in needs the GitHub App
+with `http://localhost:3000/api/auth/github/callback` among its callback URLs.
 
 ## Deploy
 
@@ -220,25 +217,45 @@ Three pieces: Supabase (database), a private GitHub repo (the runner), Vercel (t
 2. Copy the **connection pooler** string (Project Settings, Database, Connection string, "Transaction pooler").
    Use it as `DATABASE_URL` everywhere below. The pooler works from Vercel and GitHub Actions (both are IPv4-only for the direct host).
 
-### 2. GitHub tokens
+### 2. The Mogo GitHub App
 
-Create two fine-grained personal access tokens (Settings, Developer settings):
+Users sign in with it, choose the repos Mogo may review by installing it, and reviews are posted as `<app>[bot]`.
+Create it under the GitHub account (or organization) that should own Mogo: Settings, Developer settings,
+GitHub Apps, **New GitHub App**.
 
-| Token          | Repository access           | Permissions                                   | Used by                             |
-| -------------- | --------------------------- | --------------------------------------------- | ----------------------------------- |
-| Runner token   | the repos you want reviewed | Contents: read, Pull requests: read and write | Actions secret `AGENT_GITHUB_TOKEN` |
-| Dispatch token | the runner repo only        | Actions: read and write                       | Vercel env `GITHUB_TOKEN`           |
+| Field                                                  | Value                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------- |
+| GitHub App name                                        | e.g. `Mogo`; becomes the slug (`github.com/apps/<slug>`) and the bot's name |
+| Homepage URL                                           | your Vercel URL                                                             |
+| Callback URL                                           | `https://<your app>/api/auth/github/callback`; add `http://localhost:3000/api/auth/github/callback` for local dev |
+| Expire user authorization tokens                       | on                                                                          |
+| Request user authorization (OAuth) during installation | on (installing also signs the user in)                                      |
+| Enable Device Flow                                     | off                                                                         |
+| Setup URL                                              | leave empty; tick **Redirect on update**                                    |
+| Webhook                                                | active, URL `https://<your app>/api/github/webhook`, secret `openssl rand -hex 32` |
+| Repository permissions                                 | Contents: **Read-only**, Pull requests: **Read and write**, Metadata: Read-only (required) |
+| Account permissions                                    | none needed (Email addresses: Read-only if you want users' private emails)  |
+| Subscribe to events                                    | none (installation events are always sent)                                  |
+| Where can this GitHub App be installed?                | **Any account**                                                             |
 
-Actions secret names cannot start with `GITHUB_`, which is why the runner token is called `AGENT_GITHUB_TOKEN`.
+After creating it, on the App's page:
+
+1. Note the **App ID**, the **Client ID** and the slug.
+2. **Generate a new client secret**: `GITHUB_APP_CLIENT_SECRET` on Vercel.
+3. **Generate a private key** (a `.pem` download): `MOGO_APP_PRIVATE_KEY` in the runner repo. Only the runner holds it.
+4. Optional: upload a logo; it is the avatar on every review.
+
+One more token starts the runner: a fine-grained personal access token with **Actions: read and write** on the runner
+repo only, as `GITHUB_TOKEN` on Vercel.
 
 ### 3. Runner repo (GitHub Actions)
 
 1. Create a **private** repo (e.g. `you/mogo`) and push this project to its `main` branch.
    The workflow file must exist on the branch named in `RUNNER_REF`.
 2. Repo Settings, Secrets and variables, Actions. Add secrets:
-   `AGENT_GITHUB_TOKEN`, `DEEPSEEK_API_KEY`, `DATABASE_URL`, `MOGO_SECRET_KEY` (for repo secrets; same value as on Vercel);
-   optional: `SENTRY_DSN`, `LOCAL_LLM_BASE_URL` (tunnel URL, see below).
-   Add the variable `LOCAL_LLM_MODEL` if you use a local model.
+   `MOGO_APP_ID` (the App ID), `MOGO_APP_PRIVATE_KEY` (the whole `.pem` file), `DATABASE_URL`, `MOGO_SECRET_KEY`
+   (same value as on Vercel); optional: `SENTRY_DSN`. Add the variable `MOGO_APP_SLUG` for "install Mogo" links in
+   run errors. Actions names cannot start with `GITHUB_`, hence `MOGO_APP_*`.
 3. Repo settings live in the database and are edited in the web app; this repo only holds the code and workflow.
 
 Private repos get 2,000 free Actions minutes a month. Review-only runs take a couple of minutes;
@@ -249,17 +266,21 @@ runs that boot the app take longer. The job has a 25 minute timeout.
 1. Import the runner repo into Vercel. Set **Root Directory** to `web`. Next.js and pnpm are detected automatically (`pnpm-lock.yaml`).
 2. Add environment variables (Production, and Preview if you use it):
 
-   | Variable        | Value                           |
-   | --------------- | ------------------------------- |
-   | `APP_PASSWORD`  | long random password for the UI |
-   | `DATABASE_URL`  | Supabase pooler string          |
-   | `GITHUB_TOKEN`  | the dispatch token              |
-   | `RUNNER_REPO`   | `you/mogo`                      |
-   | `MOGO_SECRET_KEY` | `openssl rand -base64 32`, same as the runner repo secret |
-   | `SENTRY_DSN`    | optional                        |
+   | Variable                   | Value                                                     |
+   | -------------------------- | --------------------------------------------------------- |
+   | `GITHUB_APP_CLIENT_ID`     | the App's Client ID                                       |
+   | `GITHUB_APP_CLIENT_SECRET` | the App's client secret                                   |
+   | `GITHUB_APP_SLUG`          | the App's slug                                            |
+   | `GITHUB_WEBHOOK_SECRET`    | the App's webhook secret                                  |
+   | `DATABASE_URL`             | Supabase pooler string                                    |
+   | `MOGO_SECRET_KEY`          | `openssl rand -base64 32`, same as the runner repo secret |
+   | `GITHUB_TOKEN`             | the dispatch token                                        |
+   | `RUNNER_REPO`              | `you/mogo`                                                |
+   | `SENTRY_DSN`               | optional                                                  |
 
-3. Deploy. Open the URL, sign in, create a project, add its repos, create a feature, then **Check all repos** with
-   **dry run** ticked and watch the runs progress.
+3. Deploy. Open the URL, **Continue with GitHub** (this creates your user), set your LLM under Settings, create a
+   project, add repos (the picker lists repos where the App is installed; "Install Mogo on more repos" adds some),
+   create a feature, then **Check all repos** with **dry run** ticked and watch the runs progress.
    Check the run in the repo's Actions tab if it stays `queued`.
 
 CLI alternative: `cd web && pnpm dlx vercel --prod` (set the same variables with `vercel env add`).
@@ -268,45 +289,41 @@ CLI alternative: `cd web && pnpm dlx vercel --prod` (set the same variables with
 
 **Web app** (Vercel / `web/.env.local`): see `web/.env.example`.
 
-| Variable          | Required          | Purpose                                                     |
-| ----------------- | ----------------- | ----------------------------------------------------------- |
-| `APP_PASSWORD`    | yes in production | UI password; empty means no login (production: see below)   |
-| `AUTH_DISABLED`   | no                | `true` opens production without a password (not advised)    |
-| `MOGO_SECRET_KEY` | for secrets       | encrypts repo secrets; the runner needs the same value      |
-| `DATABASE_URL`    | yes               | Supabase Postgres                                           |
-| `GITHUB_TOKEN`    | yes               | dispatch token (Actions: read and write on the runner repo) |
-| `RUNNER_REPO`     | yes               | `owner/name` of the runner repo                             |
-| `RUNNER_WORKFLOW` | no                | default `run-agent.yml`                                     |
-| `RUNNER_REF`      | no                | branch holding the workflow, default `main`                 |
-| `SENTRY_DSN`      | no                | error reporting                                             |
+| Variable                   | Required | Purpose                                                          |
+| -------------------------- | -------- | ---------------------------------------------------------------- |
+| `GITHUB_APP_CLIENT_ID`     | yes      | sign-in with the Mogo GitHub App                                 |
+| `GITHUB_APP_CLIENT_SECRET` | yes      | sign-in with the Mogo GitHub App                                 |
+| `GITHUB_APP_SLUG`          | yes      | `github.com/apps/<slug>`: install links                          |
+| `GITHUB_WEBHOOK_SECRET`    | yes      | checks the App's webhook deliveries                              |
+| `MOGO_SECRET_KEY`          | yes      | encrypts users' GitHub tokens and LLM keys, and repo secrets; the runner needs the same value |
+| `DATABASE_URL`             | yes      | Supabase Postgres                                                |
+| `GITHUB_TOKEN`             | yes      | dispatch token (Actions: read and write on the runner repo)      |
+| `RUNNER_REPO`              | yes      | `owner/name` of the runner repo                                  |
+| `RUNNER_WORKFLOW`          | no       | default `run-agent.yml`                                          |
+| `RUNNER_REF`               | no       | branch holding the workflow, default `main`                      |
+| `SENTRY_DSN`               | no       | error reporting                                                  |
 
 **Runner** (Actions secrets, or `backend/.env` for the CLI): see `backend/.env.example`.
 
-| Variable                                                  | Purpose                                                                       |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `GITHUB_TOKEN`                                            | runner token (Actions secret name: `AGENT_GITHUB_TOKEN`)                      |
-| `LLM_MODE`                                                | `auto` (default), `local`, `deepseek`; the UI/CLI choice overrides it per run |
-| `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL` | DeepSeek (defaults: official URL, `deepseek-chat`)                            |
-| `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`                   | any OpenAI-compatible server, e.g. `http://localhost:11434/v1`                |
-| `ENVIRONMENT`                                             | required, e.g. `dev`, `staging`, `production`; sent to Sentry                 |
-| `DATABASE_URL`                                            | required, Supabase pooler URL                                                 |
-| `MOGO_SECRET_KEY`                                         | decrypts repo secrets (same value as the web app)                             |
-| `SENTRY_DSN`, `LOG_LEVEL`                                 | observability                                                                 |
-| `MAX_AGENT_STEPS`                                         | cap on agent tool-call rounds (default 25)                                    |
+| Variable                                       | Purpose                                                                  |
+| ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`      | the Mogo App (Actions secrets `MOGO_APP_ID`, `MOGO_APP_PRIVATE_KEY`)      |
+| `GITHUB_APP_SLUG`                              | optional, for install links in errors (Actions variable `MOGO_APP_SLUG`) |
+| `ENVIRONMENT`                                  | required, e.g. `dev`, `staging`, `production`; sent to Sentry            |
+| `DATABASE_URL`                                 | required, Supabase pooler URL                                            |
+| `MOGO_SECRET_KEY`                              | decrypts repo secrets and LLM keys (same value as the web app)           |
+| `SENTRY_DSN`, `LOG_LEVEL`                      | observability                                                            |
+| `MAX_AGENT_STEPS`                              | cap on agent tool-call rounds (default 25)                               |
 
-## Local LLM vs DeepSeek
+## The LLM
 
-The mode is chosen per run. `auto` probes `LOCAL_LLM_BASE_URL/models` (2 s timeout) when the run starts and uses the
-local model if it answers, otherwise DeepSeek. `local` fails the run if the server is down (no silent fallback).
+Each user sets their own under **Settings**: an OpenAI-compatible base URL, a model, and an API key (stored encrypted,
+never shown again; optional for local servers). Every run of a project uses its owner's LLM, so usage is billed to
+them. Presets fill in the base URL for OpenAI, Anthropic, DeepSeek and OpenRouter. The model must support tool calling.
 
-Any OpenAI-compatible server works (Ollama, LM Studio, vLLM, llama.cpp). The model must support tool calling;
-small models are noticeably worse at it. Example with Ollama: `ollama pull qwen2.5-coder:14b`, then
-`LOCAL_LLM_BASE_URL=http://localhost:11434/v1` and `LOCAL_LLM_MODEL=qwen2.5-coder:14b`.
-
-- **CLI on your machine:** nothing else to do.
-- **Runs on GitHub Actions:** the VM cannot reach your localhost. Expose the server with a tunnel
-  (Tailscale, or `cloudflared tunnel --url http://localhost:11434`) and put the URL, ending in `/v1`, in the
-  `LOCAL_LLM_BASE_URL` secret. When your machine or tunnel is off, `auto` falls back to DeepSeek.
+A local server (Ollama, LM Studio, vLLM, llama.cpp) works too, but runs execute on GitHub Actions, which cannot reach
+your localhost: expose it with a tunnel (Tailscale, or `cloudflared tunnel --url http://localhost:11434`) and use that
+URL, ending in `/v1`, as the base URL.
 
 ## Troubleshooting
 
@@ -318,23 +335,36 @@ small models are noticeably worse at it. Example with Ollama: `ollama pull qwen2
 | `failed: ... is not configured in any project`  | add the repo to a project in the web app                                                           |
 | `failed: PR belongs to x/y, but ...`            | the feature's PR link points at another repo; fix it on the feature's edit page                    |
 | `failed: PR comes from a fork`                  | enable "Allow PRs from forks" in the repo settings (only if you trust the fork)                    |
-| `failed: local LLM not reachable`               | the tunnel or server is down; use `auto` or `deepseek`                                             |
-| `git fetch failed`                              | runner token lacks Contents: read on that repo                                                     |
-| `could not learn conventions from main`         | the branch name in the repo settings is wrong, or the runner token cannot read it; the review continues without it |
+| `failed: ... has not set up an LLM yet`         | the project owner has no LLM under Settings                                                        |
+| LLM errors (401, 404 model)                     | wrong API key, base URL or model id under Settings                                                 |
+| `Mogo is not installed on x/y`                  | install the App on that repo (repo page, or Settings, Choose repos for Mogo)                       |
+| `GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be set` | the `MOGO_APP_ID` / `MOGO_APP_PRIVATE_KEY` Actions secrets are missing                     |
+| `could not learn conventions from main`         | the branch name in the repo settings is wrong; the review continues without it                     |
+| sign-in fails with `redirect_uri` mismatch      | add `https://<this URL>/api/auth/github/callback` to the App's callback URLs                       |
 | review posted without inline comments           | those lines were outside the diff; findings are listed in the review body                          |
 | `ModuleNotFoundError` / `venv` errors on Debian | `sudo apt install python3-venv`                                                                    |
-| web 401 on every request                        | no `APP_PASSWORD` in production (set it, or `AUTH_DISABLED=true`), or sign in again after a change |
+| `422 ... no longer installed ... or your GitHub account lost access` | the App was removed from the repo, or you lost access to it on GitHub        |
 
 ## Safety
 
 - Commands from the PR (setup, tests, app, agent shell) run with a scrubbed environment: no GitHub token, no LLM keys,
-  no DB URL. Only `PATH`, `HOME`, `CI` and that repo's env and secrets.
-- The token reaches `git` through a one-off header and is never written to `.git/config`.
+  no DB URL. Only `PATH`, `HOME`, `CI` and that repo's env and secrets. They do run as the same OS user as the runner,
+  so this is not isolation against a hostile repo: see the note below before opening sign-up to strangers.
+- Each run gets an installation token for that one repo (Contents: read, Pull requests: write), valid one hour. It
+  reaches `git` through a one-off header and is never written to `.git/config`. The App's private key stays in the
+  runner and never reaches the web app.
+- A user can add only repos their own GitHub account reaches through an installation of the App, checked again before
+  every run. Otherwise anyone could have `mogo[bot]` review a repo where somebody else installed it.
 - Fork PRs are refused unless `allow_forks` is on. Only repos configured in a project are accepted, and a feature's PR
   link must belong to the repo it is listed under.
 - The agent's `http_request` tool only reaches localhost; its file tools cannot leave the checkout.
-- The web app sits behind `APP_PASSWORD` (HMAC session cookie). There is no login rate limit; use a long password.
-  Signed-in users can edit the commands the runner executes.
+- Sign-in is GitHub only. Sessions are random tokens (only their sha256 is stored), 30 days, httpOnly cookie; the OAuth
+  round trip carries a `state` checked against a cookie. Every API route checks the session and returns 404 for other
+  users' projects, repos, features and runs.
+- Users' GitHub tokens and LLM keys are AES-256-GCM encrypted with `MOGO_SECRET_KEY`, bound to the user.
+- Signed-in users choose the commands the runner executes for their repos, and those commands run on the shared runner
+  next to its secrets (`DATABASE_URL`, `MOGO_SECRET_KEY`, the App's private key). Until the sandbox runs them as another
+  OS user or in a container, only let people you trust sign up.
 - All tables have row level security enabled and the web app uses the server connection string,
   so Supabase's public API cannot read them.
 
@@ -352,7 +382,8 @@ backend/mogo/  runner (pipeline, sandbox, review), agent (loop, tools, prompts),
                profile/ (learn a branch: structure, types), checks/ (built-in checks), llm/provider, github/,
                tools/ (migrate, import_repos)
 backend/tests/       unit + integration (fake GitHub, fake LLM, sqlite)
-web/                 Next.js app router (projects, repo settings, features), API routes, password proxy, vitest tests
+web/                 Next.js app router (projects, repo settings, features, settings), API routes, GitHub sign-in,
+                     Prisma client (prisma/schema.prisma mirrors db/migrations), vitest tests
 .github/workflows/run-agent.yml
 CHANGELOG.md  LICENSE
 ```
