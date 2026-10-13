@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 
 import { authed } from '@/lib/auth'
-import { installedRepos } from '@/lib/github-app'
+import { githubAccess } from '@/lib/github-app'
 import { githubFailure } from '@/lib/github-errors'
 
-/** Repos the user can add: those of Mogo App installations their GitHub account can see. */
+/** Whether the Mogo App is installed, and the repos the user can add: those of its installations their account can see. */
 export const GET = authed(async (user) => {
   try {
-    return NextResponse.json(await installedRepos(user.id))
+    return NextResponse.json(await githubAccess(user.id))
   } catch (e) {
     return githubFailure(e)
   }

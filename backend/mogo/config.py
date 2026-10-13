@@ -89,6 +89,10 @@ class RepoConfig(BaseModel):
     rules: list[str] = Field(default_factory=list)
     notes: str = ""  # shown to the agent verbatim: seeded accounts, how to log in, known limits
     allow_forks: bool = False
+    docker_mode: str = ""  # "dockerfile" (default) or "compose": what a Docker repo runs
+    docker_file: str = ""  # its file name at the repo root; empty: the default name(s)
+    docker_port: int = 0  # the port a Dockerfile app is published on
+    stack: str = ""  # what the repo is (express, fastapi, docker, ...): ids of web/src/lib/stack.ts; "" = not set
 
 
 def load_repos(path: str | Path) -> dict[str, RepoConfig]:

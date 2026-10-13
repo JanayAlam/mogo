@@ -18,6 +18,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   OpenRouter or Local / Custom (any OpenAI-compatible server, with tunnel steps for Cloudflare and ngrok). Keys are
   stored encrypted (write-only), checked with the provider when saved, and a connection can be tested, switched on or
   off, edited and deleted. The LLM that users had under the old single setting becomes their first connection.
+- Add repository: the repo is picked from a select of the repos the Mogo App can see (those already in the project are left out) instead of typed. With none left it says "No repo available"; when the App is installed nowhere (or GitHub access expired) it opens a Connect GitHub dialog. Connecting GitHub (or installing Mogo on more repos) opens GitHub in a popup, so the page and the dialog stay put; the dialog refreshes when the popup finishes (`/github/connected`, BroadcastChannel), and a blocked popup falls back to the full-page redirect. The dialog opens at once: a zustand store remembers whether GitHub is connected and the repo list, learned when the project page loads and refreshed whenever the dialog opens. `GET /api/github/repos` now returns `{connected, repos}`.
+- Type per repo (repo `config.stack`, one pick): Node.js (raw), Express, NestJS, Next.js, Python (raw), FastAPI or Docker,
+  listed in `web/src/lib/stack.ts`. The runner and the web app detect it from `package.json`, `pyproject.toml` and
+  `requirements.txt`; it can be changed in the repo
+  settings (Type, the first card) and shows as a tag on the project page. A new repo starts as Docker Compose (`docker-compose.yaml`, the card is titled "Run the project"); the detected type is only suggested next to the select ("Use Express"), never set by detection, in the web app or the runner. The type decides what the rest of the form asks for:
+  - Node.js, Express, NestJS, Next.js: one field per command, each a free-text input with a dropdown of the repo's
+    package.json scripts (the likely ones first): Lint, Type check, Format check, Other checks, Test, Build, Before
+    running, Run. The checks are the review's checks, the build and the steps before running happen before the app
+    starts. Saved as `config.scripts` and compiled into `gates`, `test_cmd`, `prepare`, `start`.
+  - Docker: no checks and no scripts. Run with Docker Compose (the default, `docker-compose.yaml`) or a Dockerfile
+    (`Dockerfile`, published on its port, the Dockerfile's `EXPOSE` by default), each with an optional other file name at
+    the repo root; the repo page lists the files it found and, when the one it needs is missing, offers the other file or
+    kind. The repo's variables are passed in (`$MOGO_DOCKER_ENV` is `-e NAME` for each), a Compose project is named
+    `mogo-app` so a run removes exactly what it started, and a run without the file reports "NOT started" instead of
+    failing. The ready URL (the address the runner polls until the app answers) is optional: for Compose the runner asks
+    `docker compose config` for the first port the app publishes (a service built from the repo before a database), so
+    a repo needs no per-repo setup. Saved as `docker_mode`, `docker_file`, `docker_port` and compiled into `prepare`,
+    `start`, `services_down`.
+  - Python and not set: the generic Checks and Run the app form.
+  The profile now also suggests each field (`fields`), the package.json scripts (`scripts`) and the Docker files at
+  the root (`dockerfiles`, `compose_files`). Migration 008 converts the first version of this setting (language and
+  frameworks).
+- The web app reads a repo's package.json, pyproject.toml, requirements.txt, Dockerfile and root file list itself,
+  straight from GitHub with the user's access (`POST /api/repos/:id/detect`), with no runner and no Actions token: the
+  type, scripts, Docker files and suggestions appear at once. The repo page does it by itself the first time it opens
+  a repo whose profile has no script list, and the empty script dropdowns offer "Read from GitHub now". The detection is
+  ported to TypeScript (`web/src/lib/detect.ts`); it and the runner's (`backend/mogo/profile/detect.py`) are checked
+  against the same repos in `backend/tests/data/detect_cases.json`. The runner is still what learns folders, types and
+  conventions (Re-learn now) and runs the reviews.
+- The repo settings form is rebuilt from the saved settings whenever they changed since the page was last shown (pages stay
+  mounted while you are elsewhere, and a form kept the state it was first built with).
+- The repo's stop command now runs after any start script, not only after `services_cmd`, and from the repo's folder
+  (a compose file named with a relative path is only found there).
 - LLM fallback (`llm_connections.position`, migration 007): the switched-on connections are an ordered chain, set by
   dragging the cards in Settings. A run reviews with the first one and, when it fails, starts over with the next; when
   all fail the run fails with each reason. Only LLM failures fall back (API errors, timeouts, a model that never

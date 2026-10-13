@@ -1,6 +1,8 @@
 """Learning a branch: names, types, structure, summary, git object reading, caching per commit."""
 import subprocess
 
+import pytest
+
 from mogo.models import Project, Repo
 from mogo.profile.build import DirTree, GitTree, build_profile
 from mogo.profile.naming import fits, is_test, role_suffix, style
@@ -156,3 +158,27 @@ def test_profile_is_cached_per_commit(sf, tmp_path):
     assert reused and len(built) == 1
     _, reused = ensure_profile(sf, rid, "main", "sha2", make)
     assert not reused and load_profile(sf, rid, "main").main_sha == "sha2"
+
+
+# --- the detected stack is only a suggestion: the runner never sets the repo's type
+
+def _profile(stack="nextjs"):
+    from mogo.profile.build import Profile
+    return Profile(main_sha="abc", branch="main", structure={}, suggestions={"stack": stack})
+
+
+@pytest.mark.parametrize("config", [{}, {"stack": ""}, {"stack": "docker"}, {"stack": "python", "gates": ["x"]}])
+def test_learning_a_repo_never_changes_its_settings(sf, config):
+    from conftest import seed_repos
+    from mogo.config import RepoConfig
+    from mogo.models import Repo
+    from mogo.profile.store import load_profile, save_profile
+    rid = seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})["acme/api"]
+    with sf() as s:
+        r = s.get(Repo, rid)
+        r.config = dict(config)
+        s.commit()
+    save_profile(sf, rid, _profile())
+    with sf() as s:
+        assert s.get(Repo, rid).config == config  # not even a `stack` key added
+    assert load_profile(sf, rid, "main").suggestions["stack"] == "nextjs"  # but it is offered

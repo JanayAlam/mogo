@@ -97,7 +97,7 @@ def build_profile(tree: Tree, sha: str, branch: str) -> Profile:
     texts = tree.read_many(typed[:MAX_TYPE_FILES])
     types = [t.as_dict() for p, text in texts.items() for t in extract_types(p, text)][:MAX_TYPES]
     root_names = {p for p in paths if "/" not in p}
-    wanted = [n for n in ("package.json", "pyproject.toml", *ENV_EXAMPLES) if n in root_names]
+    wanted = [n for n in ("package.json", "pyproject.toml", "requirements.txt", "Dockerfile", *ENV_EXAMPLES) if n in root_names]
     root_files = tree.read_many(wanted)
     suggestions = detect(root_names, root_files.get)
     profile = Profile(main_sha=sha, branch=branch, structure=structure, type_index=types, suggestions=suggestions)

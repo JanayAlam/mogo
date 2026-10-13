@@ -46,10 +46,36 @@ other repos of the feature (their roles and PRs, so contract mismatches are visi
 
 ### Repo settings
 
-When a repo is added, the runner reads its source of truth branch (`package.json`, the lockfile, `tsconfig.json`,
-`pyproject.toml`, `.env.example`) and the repo page offers what it found under **Detected on main**: checks (lint,
+When a repo's page is opened, the web app reads the root files of its source of truth branch straight from GitHub
+(`package.json`, the lockfile names, `tsconfig.json`, `pyproject.toml`, `requirements.txt`, `Dockerfile`, `.env.example`; no
+runner and no Actions token needed) and offers what it found under **Detected on main**: checks (lint,
 type check, format check), test command, start script and ready URL. **Use these** fills the empty fields; nothing is
-saved until you click Save. **Re-learn now** reads the branch again.
+saved until you click Save. **Re-learn now** has the runner read the whole branch (folders, type definitions, conventions).
+The two detections are the same code in two languages (`web/src/lib/detect.ts`, `backend/mogo/profile/detect.py`), kept
+in step by `backend/tests/data/detect_cases.json`.
+
+Under **Type** (the first card) you say what the repo is: Node.js, Express, NestJS, Next.js, Python, FastAPI or Docker. A new
+repo starts as **Docker**; what the repo looks like is detected and suggested next to the select ("Use Express"), but never
+chosen for you. The type shows as a tag on the project page. The type decides
+what the rest of the form asks for:
+
+- **Node.js, Express, NestJS, Next.js** keep their commands in `package.json`, so each command has its own field with a
+  dropdown of the repo's scripts (and free text): **Lint**, **Type check**, **Format check**, **Other checks**, **Test**,
+  **Build**, **Before running** (start a database, migrate) and **Run**. The checks fail the review when they fail; the
+  build and the steps before running happen before the app starts (with no Run command the build is a check instead).
+- **Docker** has no checks and no scripts. The project is started from **Docker Compose** (the default, file
+  `docker-compose.yaml`) or a **Dockerfile** (`Dockerfile`); name another file at the repo root if it is called
+  something else. A Compose project is brought up with `docker compose up -d --build` under the project name `mogo-app`
+  and taken down with its volumes afterwards; a Dockerfile app is built and run with its port published (the
+  Dockerfile's `EXPOSE`, or the Port you enter). The repo's environment variables are passed in (Compose reads them
+  from the environment; for a Dockerfile `$MOGO_DOCKER_ENV` is `-e NAME` for each). The **Ready URL** is the address the
+  runner polls after starting, until the app answers (any answer counts, even a 404), before the agent tests it;
+  leave it empty and the runner uses the first port the compose file publishes (a service built from the repo before a
+  database), or the Port of a Dockerfile app. The runner host needs Docker with the Compose plugin (GitHub's runners
+  have both). Docker is chosen, never detected.
+- **Python** and **not set** use the generic Checks and Run the app form.
+
+Another type is added in `web/src/lib/stack.ts` and `detect_stack` in `backend/mogo/profile/detect.py`.
 
 | Section | What it is | Stored as (`repos.config`) |
 | --- | --- | --- |

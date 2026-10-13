@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -16,6 +17,7 @@ from mogo.agent.schemas import GateResult
 from mogo.agent.tools import ToolBox
 from mogo.checks import CheckContext, CheckOutcome, enabled_checks, render_section, run_checks
 from mogo.config import RepoConfig, Settings
+from mogo.docker import compose_ready_url, docker_problem
 from mogo.context import ContextError, RunContext, load_context
 from mogo.github.app import repo_token as app_repo_token
 from mogo.github.client import GitHubClient, GitHubError, parse_pr_url
@@ -30,6 +32,8 @@ from mogo.runner.review import render_summary, split_findings, verdict
 from mogo.secrets import Redactor, decrypt_all
 
 log = logging.getLogger(__name__)
+
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class RunFailed(RuntimeError):
@@ -112,6 +116,7 @@ def execute_run(
     app: sandbox.AppProcess | None = None
     cfg: RepoConfig | None = None
     services_started = False
+    start_attempted = False  # the app's start script ran (or tried to): its stop command must run
     try:
         with sf() as s:
             run = s.get(Run, run_id)
@@ -148,6 +153,9 @@ def execute_run(
         for problem in secret_problems:
             rec(f"repo secret unavailable: {problem}", "warn")
         repo_env = {**ctx.env, **stored}  # a sensitive value wins over a plain one with the same name
+        # For `docker run`: forwards the repo's variables into the container by name (the values stay in the
+        # environment, never on the command line). Only well-formed names, so the string is safe in a shell.
+        repo_env["MOGO_DOCKER_ENV"] = " ".join(f"-e {n}" for n in sorted(repo_env) if _ENV_NAME.match(n))
         rec.redact = Redactor([*stored.values(), *[c.api_key for c in chain], token])
         if stored:
             rec(f"repo secrets: {', '.join(sorted(stored))}")
@@ -184,7 +192,14 @@ def execute_run(
             rec(f"gates: {sum(g.ok for g in gates)}/{len(gates)} passed")
 
         app_status = "not started (review only)" if not feature else "no start command configured"
-        if feature and cfg.start:
+        docker_error = docker_problem(cfg, root) if cfg.stack == "docker" else None
+        if feature and cfg.start and docker_error:
+            app_status = (
+                f"NOT started: the repo is set to run in Docker, but {docker_error}. "
+                "Report this as a blocker finding or unverified criteria."
+            )
+        elif feature and cfg.start:
+            start_attempted = True
             if cfg.services_cmd:
                 services_started = True
                 code, out = sandbox.run_cmd(cfg.services_cmd, root, env=repo_env)
@@ -199,7 +214,12 @@ def execute_run(
                     break
             if prepared:
                 # Any answer below 500 means "up": a health route for an API, the home page for a frontend.
-                ready_url = cfg.healthcheck or f"http://localhost:{repo_env.get('PORT') or 3000}"
+                ready_url = cfg.healthcheck
+                if not ready_url and cfg.stack == "docker" and cfg.docker_mode == "compose":
+                    ready_url = compose_ready_url(cfg, root, repo_env, sandbox.run_cmd) or ""
+                    if ready_url:
+                        rec(f"ready URL, from the compose file: {ready_url}")
+                ready_url = ready_url or f"http://localhost:{repo_env.get('PORT') or 3000}"
                 app = sandbox.AppProcess(cfg.start, root, repo_env, ready_url)
                 if app.wait_healthy():
                     app_status = f"running at {ready_url} (it answered). Test command: `{cfg.test_cmd or 'n/a'}`"
@@ -269,8 +289,10 @@ def execute_run(
     finally:
         if app:
             app.stop()
-        if services_started and cfg and cfg.services_down:
-            code, out = sandbox.run_cmd(cfg.services_down, workdir, timeout=120, env=repo_env)
+        if (services_started or start_attempted) and cfg and cfg.services_down:
+            # in the repo, like the start script: a compose file is found relative to it
+            cwd = workdir / "repo" if (workdir / "repo").is_dir() else workdir
+            code, out = sandbox.run_cmd(cfg.services_down, cwd, timeout=120, env=repo_env)
             if code:
                 log.warning("services_down failed: %s", sandbox.tail(out, 500))
         shutil.rmtree(workdir, ignore_errors=True)

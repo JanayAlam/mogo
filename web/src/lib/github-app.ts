@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
+import { DETECT_FILES, ENV_EXAMPLES, type Read } from '@/lib/detect'
 import { type GitHubProfile, type GitHubTokens, loadGitHubTokens, saveGitHubTokens } from '@/lib/users'
 
 /**
@@ -95,12 +96,21 @@ interface RepoPayload {
 
 const MAX_PAGES = 10 // 1000 repos per installation is plenty for a picker
 
-/** Every repo the user can see through an installation of the App: what they may add to a project. */
-export async function installedRepos(userId: string): Promise<InstalledRepo[]> {
+export interface GitHubAccess {
+  connected: boolean // the Mogo App is installed on at least one account the user can see
+  repos: InstalledRepo[]
+}
+
+/**
+ * Every repo the user can see through an installation of the App: what they may add to a project. `connected` tells
+ * "the App is installed nowhere yet" (connect GitHub) from "installed, but no repo to offer".
+ */
+export async function githubAccess(userId: string): Promise<GitHubAccess> {
   const token = await userToken(userId)
   const out: InstalledRepo[] = []
   const { installations } = await gh<{ installations: Installation[] }>(token, '/user/installations?per_page=100')
-  for (const inst of installations.filter((i) => !i.suspended_at)) {
+  const active = installations.filter((i) => !i.suspended_at)
+  for (const inst of active) {
     for (let page = 1; page <= MAX_PAGES; page++) {
       const { repositories } = await gh<{ repositories: RepoPayload[] }>(
         token,
@@ -118,8 +128,10 @@ export async function installedRepos(userId: string): Promise<InstalledRepo[]> {
       if (repositories.length < 100) break
     }
   }
-  return out.sort((a, b) => a.full_name.localeCompare(b.full_name))
+  return { connected: active.length > 0, repos: out.sort((a, b) => a.full_name.localeCompare(b.full_name)) }
 }
+
+export const installedRepos = async (userId: string): Promise<InstalledRepo[]> => (await githubAccess(userId)).repos
 
 /** The installation through which this user may use `fullName`, or null (not installed, or no access). */
 export async function accessibleRepo(userId: string, fullName: string): Promise<InstalledRepo | null> {
@@ -133,4 +145,44 @@ export function validWebhookSignature(body: string, header: string | null, secre
   const expected = Buffer.from('sha256=' + createHmac('sha256', secret).update(body).digest('hex'))
   const given = Buffer.from(header)
   return given.length === expected.length && timingSafeEqual(given, expected)
+}
+
+/** The repo or its branch cannot be read with the user's access (it does not exist, or the Mogo App is not on it). */
+export class RepoReadError extends Error {}
+
+const MAX_FILE_CHARS = 300_000
+
+/**
+ * The root of a repo's branch as the user's access sees it: which files are there, and the text of those the
+ * detection reads (lib/detect.ts DETECT_FILES). Straight from GitHub, no clone and no runner: a handful of requests.
+ */
+export async function readRepoRoot(userId: string, fullName: string, ref: string): Promise<{ names: Set<string>; read: Read }> {
+  const token = await userToken(userId)
+  const base = `/repos/${fullName.split('/').map(encodeURIComponent).join('/')}/contents`
+  const query = `?ref=${encodeURIComponent(ref)}`
+  const get = async (path: string, accept: string) => {
+    const res = await fetch(`${API}${base}${path}${query}`, {
+      headers: { ...HEADERS, Accept: accept, Authorization: `Bearer ${token}` },
+    })
+    if (res.status === 401) throw new GitHubReauthError('GitHub access expired; sign in again')
+    if (res.status === 404) throw new RepoReadError(`${fullName} (branch ${ref}) was not found, or the Mogo App cannot read it`)
+    if (!res.ok) throw new Error(`GitHub API ${res.status} reading ${fullName}`)
+    return res
+  }
+
+  const listing = (await (await get('', HEADERS.Accept)).json()) as { name: string; type: string }[]
+  if (!Array.isArray(listing)) throw new RepoReadError(`${fullName} (branch ${ref}) has no files at its root`)
+  const names = new Set(listing.filter((e) => e.type === 'file').map((e) => e.name))
+
+  // the detection reads the first env example only, like the runner
+  const envExample = ENV_EXAMPLES.find((n) => names.has(n))
+  const wanted = DETECT_FILES.filter((n) => names.has(n) && (!ENV_EXAMPLES.includes(n) || n === envExample))
+  const texts = new Map<string, string>()
+  await Promise.all(
+    wanted.map(async (n) => {
+      const res = await get(`/${encodeURIComponent(n)}`, 'application/vnd.github.raw+json')
+      texts.set(n, (await res.text()).slice(0, MAX_FILE_CHARS))
+    }),
+  )
+  return { names, read: (n) => texts.get(n) }
 }

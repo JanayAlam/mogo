@@ -2,13 +2,13 @@ import type { FeatureInput, FeatureRow } from '@/lib/features'
 import type { ProjectRow, ProjectSummary, RepoInput, RepoRow } from '@/lib/projects'
 import type { RunRow } from '@/lib/runs'
 import type { EnvVarInfo } from '@/lib/env'
-import type { InstalledRepo } from '@/lib/github-app'
+import type { GitHubAccess, InstalledRepo } from '@/lib/github-app'
 import type { SessionUser } from '@/lib/sessions'
 import type { LlmConnection } from '@/lib/llm'
 import type { Provider } from '@/lib/llm-providers'
 
 export type { FeatureRow as Feature, ProjectRow as Project, ProjectSummary, RepoRow as Repo, RunRow as Run }
-export type { InstalledRepo, LlmConnection }
+export type { GitHubAccess, InstalledRepo, LlmConnection }
 
 export interface Criterion {
   text: string
@@ -46,8 +46,16 @@ export interface Stats {
   done: number
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+export class UnauthorizedError extends Error {
+  constructor() {
+    super('unauthorized')
+  }
+}
+
+/** `unauthorized`: what a 401 means. 'login' (the default) sends the page to sign in; 'return' hands it back to the caller. */
+async function call<T>(path: string, init?: RequestInit, unauthorized: 'login' | 'return' = 'login'): Promise<T> {
   const res = await fetch(`/api${path}`, { headers: { 'Content-Type': 'application/json' }, ...init })
+  if (res.status === 401 && unauthorized === 'return') throw new UnauthorizedError()
   if (res.status === 401) {
     // full reload on purpose: drops any stale client state
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
@@ -83,7 +91,15 @@ export const api = {
     call<{ connections: LlmConnection[] }>('/settings/llm/order', send('PUT', { ids })),
   deleteLlmConnection: (id: string) => call<{ ok: true }>(`/settings/llm/${id}`, { method: 'DELETE' }),
   testLlmConnection: (id: string) => call<{ ok: true }>(`/settings/llm/${id}/test`, send('POST')),
-  installedRepos: () => call<InstalledRepo[]>('/github/repos'),
+  /**
+   * 401 here means GitHub access expired (the page itself is signed in): that is "connect GitHub again", not a reason
+   * to leave the page, so it reads as not connected.
+   */
+  githubAccess: (): Promise<GitHubAccess> =>
+    call<GitHubAccess>('/github/repos', undefined, 'return').catch((e) => {
+      if (e instanceof UnauthorizedError) return { connected: false, repos: [] }
+      throw e
+    }),
 
   projects: () => call<ProjectSummary[]>('/projects'),
   project: (id: string) => call<ProjectRow>(`/projects/${id}`),
@@ -97,6 +113,11 @@ export const api = {
     call<{ id: string; learning: boolean }>(`/projects/${projectId}/repos`, send('POST', body)),
   updateRepo: (id: string, body: Partial<RepoInput>) => call<{ ok: true }>(`/repos/${id}`, send('PATCH', body)),
   deleteRepo: (id: string) => call<{ ok: true }>(`/repos/${id}`, { method: 'DELETE' }),
+  /** Reads the repo's root files from GitHub for suggestions, no runner. A 401 (GitHub access expired) is thrown, not a redirect. */
+  detectRepo: (id: string) =>
+    call<{ ok: true; stack: string }>(`/repos/${id}/detect`, send('POST'), 'return').catch((e) => {
+      throw e instanceof UnauthorizedError ? new Error('GitHub access expired; sign in again') : e
+    }),
   relearn: (id: string) => call<{ ok: true }>(`/repos/${id}/profile`, send('POST')),
   env: (id: string) => call<{ vars: EnvVarInfo[]; key_configured: boolean }>(`/repos/${id}/env`),
   setEnvVar: (id: string, name: string, body: { value?: string; sensitive: boolean }) =>

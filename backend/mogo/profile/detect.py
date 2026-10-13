@@ -1,4 +1,5 @@
-"""Read a repo's own files and suggest its run settings: install, checks, test, start, app URL, env names.
+"""Read a repo's own files and suggest its run settings: install, checks, test, start, app URL, env names, its
+stack (what kind of app it is) and whether it has a Dockerfile.
 
 Only the repo root is read (package.json, lockfiles, tsconfig.json, pyproject.toml, .env.example). The UI shows the
 result for the user to accept; the runner also uses `install_command` when a repo sets no install override.
@@ -23,6 +24,54 @@ FRAMEWORK_PORTS = (  # dependency -> default dev port
     ("next", 3000), ("nuxt", 3000), ("@remix-run/dev", 3000), ("@nestjs/core", 3000), ("astro", 4321),
     ("vite", 5173), ("express", 3000), ("fastify", 3000),
 )
+
+
+def _deps(pkg: dict) -> dict:
+    return {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+
+
+def _package_json(read: Callable[[str], str | None]) -> dict:
+    try:
+        pkg = json.loads(read("package.json") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return pkg if isinstance(pkg, dict) else {}
+
+
+def _mentions(text: str, name: str) -> bool:
+    """A Python dependency named `name` in requirements or pyproject text (not `fastapi-utils`, not a comment)."""
+    return bool(re.search(rf"(?im)^[^#\n]*(?<![\w-]){re.escape(name)}(?![\w-])", text))
+
+
+def detect_stack(names: set[str], read: Callable[[str], str | None]) -> str:
+    """What the repo is, as an id of web/src/lib/stack.ts ('' when not recognised). A framework dependency decides
+    first (Next.js, then NestJS, which sits on Express, then Express); Python project files come before a bare
+    package.json, which a Python repo may have for its tooling. Docker is never detected: it is chosen."""
+    deps = _deps(_package_json(read)) if "package.json" in names else {}
+    for dep, stack in (("next", "nextjs"), ("@nestjs/core", "nestjs"), ("express", "express")):
+        if dep in deps:
+            return stack
+    if names & {"pyproject.toml", "requirements.txt", "setup.py", "Pipfile"}:
+        text = "\n".join(read(n) or "" for n in ("pyproject.toml", "requirements.txt"))
+        return "fastapi" if _mentions(text, "fastapi") else "python"
+    return "nodejs" if "package.json" in names else ""
+
+
+COMPOSE_NAMES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+
+
+def detect_docker(names: set[str], read: Callable[[str], str | None]) -> dict:
+    """The root Docker files: the default `Dockerfile` (and the first port it EXPOSEs, 0 when none), every
+    Dockerfile-like name and every Compose file, for the repo page to offer."""
+    out: dict = {
+        "dockerfile": "Dockerfile" in names, "docker_port": 0,
+        "dockerfiles": sorted(n for n in names if n == "Dockerfile" or n.startswith("Dockerfile.") or n.endswith(".Dockerfile")),
+        "compose_files": sorted(n for n in names if n in COMPOSE_NAMES or re.fullmatch(r"(docker-)?compose[.-].+\.ya?ml", n)),
+    }
+    if out["dockerfile"]:
+        m = re.search(r"(?im)^\s*EXPOSE\s+(\d{1,5})", read("Dockerfile") or "")
+        out["docker_port"] = int(m.group(1)) if m else 0
+    return out
 
 
 def package_manager(names: set[str]) -> str | None:
@@ -89,7 +138,10 @@ def _port(env_text: str, scripts: dict, deps: dict) -> int:
 def detect(names: set[str], read: Callable[[str], str | None]) -> dict:
     """Suggested settings. `names` are the file names at the repo root, `read(name)` returns a root file's text."""
     out: dict = {"install": install_command(names), "checks": [], "test_cmd": "", "start": "", "app_url": "",
-                 "env_names": []}
+                 "env_names": [], "stack": detect_stack(names, read), **detect_docker(names, read),
+                 # the same commands per form field (empty when the repo has no such script), and every script
+                 "fields": {"lint": "", "typecheck": "", "format": "", "test": "", "build": "", "run": ""},
+                 "scripts": []}
     env_file = next((n for n in ENV_EXAMPLES if n in names), None)
     env_text = (read(env_file) or "") if env_file else ""
     out["env_names"] = env_names(env_text)
@@ -97,24 +149,30 @@ def detect(names: set[str], read: Callable[[str], str | None]) -> dict:
     pm = package_manager(names)
     if pm:
         out["package_manager"] = pm
-        try:
-            pkg = json.loads(read("package.json") or "{}")
-        except json.JSONDecodeError:
-            pkg = {}
+        pkg = _package_json(read)
         scripts = pkg.get("scripts") or {}
-        deps = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
-        for group in CHECK_GROUPS:
+        deps = _deps(pkg)
+        fields = out["fields"]
+        for field, group in zip(("lint", "typecheck", "format"), CHECK_GROUPS):
             if found := next((s for s in group if s in scripts), None):
-                out["checks"].append(_run(pm, found))
+                fields[field] = _run(pm, found)
+                out["checks"].append(fields[field])
         has_types_check = any(s in scripts for s in CHECK_GROUPS[1])
         if not has_types_check and "tsconfig.json" in names and "typescript" in deps:
-            out["checks"].append(_exec(pm, "tsc --noEmit"))
+            fields["typecheck"] = _exec(pm, "tsc --noEmit")
+            out["checks"].append(fields["typecheck"])
         test = scripts.get("test", "")
         if test and NPM_DEFAULT_TEST not in test:
-            out["test_cmd"] = _run(pm, "test")
+            fields["test"] = out["test_cmd"] = _run(pm, "test")
+        if "build" in scripts:
+            fields["build"] = _run(pm, "build")
         if start := next((s for s in START_SCRIPTS if s in scripts), None):
-            out["start"] = _run(pm, start)
+            fields["run"] = out["start"] = _run(pm, start)
             out["app_url"] = f"http://localhost:{_port(env_text, scripts, deps)}"
+        out["scripts"] = [
+            {"name": n, "run": _run(pm, n), "body": body[:120]}
+            for n, body in scripts.items() if isinstance(n, str) and isinstance(body, str)
+        ][:80]
     elif "pyproject.toml" in names:
         out["package_manager"] = "python"
         py = read("pyproject.toml") or ""

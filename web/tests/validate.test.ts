@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { defaultRepoConfig } from '@/lib/repo-form'
 import { featureState } from '@/lib/status'
 import { validateFeatureInput, validateProjectInput, validateRepoInput } from '@/lib/validate'
 
@@ -16,10 +17,11 @@ describe('validateProjectInput', () => {
 })
 
 describe('validateRepoInput', () => {
-  it('accepts a github url and fills defaults', () => {
+  it('accepts a github url and fills defaults (a new repo runs in Docker)', () => {
     expect(validateRepoInput({ full_name: 'https://github.com/acme/api.git', role: 'backend' })).toEqual({
-      full_name: 'acme/api', role: 'backend', default_branch: 'main', config: {},
+      full_name: 'acme/api', role: 'backend', default_branch: 'main', config: defaultRepoConfig(),
     })
+    expect(defaultRepoConfig().stack).toBe('docker')
   })
   it.each([
     [{ full_name: 'not a repo' }, 'owner/repo'],

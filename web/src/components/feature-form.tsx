@@ -21,34 +21,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { FormSkeleton } from "@/components/skeletons";
-import {
-  BackLink,
-  Chip,
-  ErrorText,
-  Eyebrow,
-  Field,
-  Shell,
-  useAction,
-  useApi,
-} from "@/components/ui-kit";
+import { BackLink, Chip, ErrorText, Eyebrow, Field, Shell, useAction, useApi } from "@/components/ui-kit";
 import { api, type Feature, type Project } from "@/lib/client";
 import { cn } from "@/lib/utils";
 
 /** /projects/[id]/features/new and /projects/[id]/features/[featureId]/edit */
 export function FeatureFormPage() {
   const { id, featureId } = useParams<{ id: string; featureId?: string }>();
+
   const project = useApi(() => api.project(id), id);
-  const feature = useApi(
-    () => (featureId ? api.feature(featureId) : Promise.resolve(null)),
-    featureId ?? "new",
-  );
-  const back = featureId
-    ? `/projects/${id}/features/${featureId}`
-    : `/projects/${id}`;
+  const feature = useApi(() => (featureId ? api.feature(featureId) : Promise.resolve(null)), featureId ?? "new");
+  const back = featureId ? `/projects/${id}/features/${featureId}` : `/projects/${id}`;
   const ready = project.data && (!featureId || feature.data);
+
   return (
     <Shell>
-      <BackLink href={back}>back</BackLink>
+      <BackLink href={back}>Back</BackLink>
       <ErrorText error={project.error || feature.error} />
       {ready ? (
         <FeatureForm project={project.data!} feature={feature.data} />
@@ -65,13 +53,7 @@ interface Entry {
   requirements: string;
 }
 
-function FeatureForm({
-  project,
-  feature,
-}: {
-  project: Project;
-  feature: Feature | null;
-}) {
+function FeatureForm({ project, feature }: { project: Project; feature: Feature | null }) {
   const router = useRouter();
   const [title, setTitle] = useState(feature?.title ?? "");
   const [description, setDescription] = useState(feature?.description ?? "");
@@ -92,12 +74,8 @@ function FeatureForm({
   const [entries, setEntries] = useState(initialEntries);
   const [confirmDrop, setConfirmDrop] = useState(false);
   const action = useAction();
-  const patch = (repoId: string, p: Partial<Entry>) =>
-    setEntries((e) => ({ ...e, [repoId]: { ...e[repoId], ...p } }));
-  const dropped =
-    feature?.repos.filter(
-      (r) => !entries[r.repo_id]?.included && r.latest_run,
-    ) ?? [];
+  const patch = (repoId: string, p: Partial<Entry>) => setEntries((e) => ({ ...e, [repoId]: { ...e[repoId], ...p } }));
+  const dropped = feature?.repos.filter((r) => !entries[r.repo_id]?.included && r.latest_run) ?? [];
 
   function save() {
     const repos = project.repos
@@ -133,12 +111,11 @@ function FeatureForm({
         }
         if (dropped.length) setConfirmDrop(true);
         else save();
-      }}>
+      }}
+    >
       <div>
         <Eyebrow className="tracking-widest text-primary">{project.name}</Eyebrow>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          {feature ? "Edit feature" : "New feature"}
-        </h1>
+        <h1 className="mt-1 text-3xl font-semibold tracking-tight">{feature ? "Edit feature" : "New feature"}</h1>
       </div>
 
       <Card>
@@ -156,7 +133,8 @@ function FeatureForm({
           <Field
             label="What the feature does"
             htmlFor="f-desc"
-            hint="The agent turns this into acceptance criteria for each repo, read through the repo's role.">
+            hint="The agent turns this into acceptance criteria for each repo, read through the repo's role."
+          >
             <Textarea
               id="f-desc"
               className="min-h-32"
@@ -172,17 +150,14 @@ function FeatureForm({
         <div>
           <h2 className="font-semibold">Repos and pull requests</h2>
           <p className="text-sm text-muted-foreground">
-            Tick each repo the feature touches. Built-in checks (no duplicate
-            types, file and folder conventions learned from the source branch)
-            always run.
+            Tick each repo the feature touches. Built-in checks (no duplicate types, file and folder conventions learned
+            from the source branch) always run.
           </p>
         </div>
         {project.repos.map((r) => {
           const e = entries[r.id];
           return (
-            <Card
-              key={r.id}
-              className={cn("transition-colors", e.included && "border-primary/40")}>
+            <Card key={r.id} className={cn("transition-colors", e.included && "border-primary/40")}>
               <CardHeader className="p-4">
                 <div className="flex items-center gap-3">
                   <Checkbox
@@ -190,9 +165,7 @@ function FeatureForm({
                     checked={e.included}
                     onCheckedChange={(v) => patch(r.id, { included: v === true })}
                   />
-                  <Label
-                    htmlFor={`inc-${r.id}`}
-                    className="flex cursor-pointer items-center gap-2">
+                  <Label htmlFor={`inc-${r.id}`} className="flex cursor-pointer items-center gap-2">
                     <Chip>{r.role || "no role"}</Chip>
                     <span className="font-mono">{r.full_name}</span>
                   </Label>
@@ -210,16 +183,12 @@ function FeatureForm({
                       placeholder={`https://github.com/${r.full_name}/pull/123`}
                     />
                   </Field>
-                  <Field
-                    label="Requirements for this repo (optional)"
-                    htmlFor={`req-${r.id}`}>
+                  <Field label="Requirements for this repo (optional)" htmlFor={`req-${r.id}`}>
                     <Textarea
                       id={`req-${r.id}`}
                       className="min-h-20"
                       value={e.requirements}
-                      onChange={(ev) =>
-                        patch(r.id, { requirements: ev.target.value })
-                      }
+                      onChange={(ev) => patch(r.id, { requirements: ev.target.value })}
                       placeholder={`What to check in ${r.role || "this repo"} in particular: endpoints, screens, edge cases…`}
                     />
                   </Field>
@@ -232,9 +201,7 @@ function FeatureForm({
 
       <ErrorText error={action.error} />
       <div className="flex justify-end gap-2">
-        <Button loading={action.busy}>
-          {feature ? "Save" : "Create feature"}
-        </Button>
+        <Button loading={action.busy}>{feature ? "Save" : "Create feature"}</Button>
       </div>
 
       <AlertDialog open={confirmDrop} onOpenChange={setConfirmDrop}>
@@ -242,15 +209,12 @@ function FeatureForm({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove repos from this feature?</AlertDialogTitle>
             <AlertDialogDescription>
-              Removing {dropped.map((r) => r.full_name).join(", ")} deletes
-              their run history for this feature.
+              Removing {dropped.map((r) => r.full_name).join(", ")} deletes their run history for this feature.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className={buttonVariants({ variant: "destructive" })}
-              onClick={save}>
+            <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={save}>
               Remove and save
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -75,7 +75,7 @@ def test_full_run_posts_inline_and_general(settings, repos, sf):
     with sf() as s:
         r = s.get(Run, rid)
         assert r.status == "succeeded", r.error
-        assert r.llm_used == "deepseek-chat @ api.deepseek.com" and r.review_url.endswith("#review")
+        assert r.llm_used == "deepseek-flash @ api.deepseek.com" and r.review_url.endswith("#review")
         assert r.verdict == "ok" and any("review posted" in e.message for e in r.events)
     review = posted[0]
     assert review["event"] == "COMMENT" and review["commit_id"] == "abc"
@@ -311,3 +311,106 @@ def test_an_error_outside_the_llm_does_not_fall_back(settings, sf, fake_app_toke
         r = s.get(Run, rid)
         assert r.status == "failed" and "bug in our code" in r.error
     assert asked == ["gpt-4.1"]  # the second was never tried
+
+
+# --- Docker: the Dockerfile is required, the repo's variables are forwarded, the stop command always runs
+
+def _checkout_with_dockerfile(owner, repo, number, token, dest):
+    fake_checkout(owner, repo, number, token, dest)
+    (dest / "Dockerfile").write_text("FROM scratch\nEXPOSE 8769\n")
+
+
+def test_docker_without_a_dockerfile_is_not_started_and_the_agent_is_told(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", start=f"touch {tmp_path}/started")}
+    seed_repos(sf, cfg)
+    rid = make_run(sf, feature="thing works")
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
+    assert not (tmp_path / "started").exists()
+    assert "NOT started" in llm.first_user_prompt and "no Dockerfile" in llm.first_user_prompt
+    with sf() as s:
+        assert s.get(Run, rid).status == "succeeded"  # the review still happens
+
+
+def test_docker_with_a_dockerfile_starts_and_gets_the_variable_names(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    cfg = {"acme/api": RepoConfig(
+        name="acme/api", stack="docker", healthcheck="http://localhost:8769",
+        start=f'echo "$MOGO_DOCKER_ENV" > {tmp_path}/flags; python3 -m http.server 8769',
+    )}
+    seed_repos(sf, cfg, env={"acme/api": {"APP_MODE": "test", "ZED": "1", "bad name; touch x": "no"}})
+    rid = make_run(sf, feature="thing works")
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=_checkout_with_dockerfile)
+    # names only (values are passed through the environment), sorted, and a malformed name never reaches a shell
+    assert (tmp_path / "flags").read_text().strip() == "-e APP_MODE -e ZED"
+    assert "running at http://localhost:8769 (it answered)" in llm.first_user_prompt
+
+
+def test_the_stop_command_runs_after_a_start_script_without_services(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    # how the web form saves a repo: the start script is `start`, there is no services_cmd
+    cfg = {"acme/api": RepoConfig(
+        name="acme/api", start="python3 -m http.server 8770", healthcheck="http://localhost:8770",
+        services_down=f"touch {tmp_path}/stopped",
+    )}
+    seed_repos(sf, cfg)
+    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]),
+                llm_factory=lambda _c: FakeLLM([[tool_call("submit_report", {"summary": "ok"})]]),
+                checkout=fake_checkout)
+    assert (tmp_path / "stopped").exists()
+
+
+def test_the_stop_command_does_not_run_when_the_app_was_never_started(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    cfg = {"acme/api": RepoConfig(name="acme/api", start="true", services_down=f"touch {tmp_path}/stopped")}
+    seed_repos(sf, cfg)
+    execute_run(make_run(sf), settings, sf, gh=fake_github([]),  # no feature: review only
+                llm_factory=lambda _c: FakeLLM([[tool_call("submit_report", {"summary": "ok"})]]),
+                checkout=fake_checkout)
+    assert not (tmp_path / "stopped").exists()
+
+
+def test_docker_with_its_own_file_name_is_found_by_that_name(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+
+    def checkout(owner, repo, number, token, dest):
+        fake_checkout(owner, repo, number, token, dest)
+        (dest / "Dockerfile.dev").write_text("FROM scratch\n")  # no plain Dockerfile
+
+    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", docker_file="Dockerfile.dev",
+                                  start="python3 -m http.server 8772", healthcheck="http://localhost:8772")}
+    seed_repos(sf, cfg)
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
+                checkout=checkout)
+    assert "NOT started" not in llm.first_user_prompt
+    assert "running at http://localhost:8772 (it answered)" in llm.first_user_prompt
+
+
+def test_docker_without_the_named_file_says_which_file(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", docker_mode="compose", docker_file="stack.yml",
+                                  start=f"touch {tmp_path}/started")}
+    seed_repos(sf, cfg)
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
+                checkout=fake_checkout)
+    assert not (tmp_path / "started").exists()
+    assert "NOT started" in llm.first_user_prompt and "stack.yml" in llm.first_user_prompt
+
+
+def test_the_stop_command_runs_inside_the_repo(settings, sf, tmp_path):
+    from mogo.config import RepoConfig
+    # a compose file named with a relative path (`-f docker-compose.prod.yaml`) is only found from the repo's folder:
+    # CONVENTIONS.md is a file of the checkout
+    cfg = {"acme/api": RepoConfig(
+        name="acme/api", start="python3 -m http.server 8774", healthcheck="http://localhost:8774",
+        services_down=f"test -f CONVENTIONS.md && touch {tmp_path}/ran-in-the-repo",
+    )}
+    seed_repos(sf, cfg)
+    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]),
+                llm_factory=lambda _c: FakeLLM([[tool_call("submit_report", {"summary": "ok"})]]),
+                checkout=fake_checkout)
+    assert (tmp_path / "ran-in-the-repo").exists()

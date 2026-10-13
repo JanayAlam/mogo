@@ -104,3 +104,106 @@ def test_import_puts_yaml_env_into_plain_variables(sf, tmp_path):
     with sf() as s:
         rows = {r.name: (r.sensitive, r.value) for r in s.query(RepoEnvVar)}
     assert rows == {"PORT": (False, "8000"), "MODE": (False, "test")}
+
+
+# --- the stack: what kind of app the repo is
+
+def stack(files):
+    return run_detect(files)["stack"]
+
+
+@pytest.mark.parametrize("files,expected", [
+    ({"package.json": json.dumps({"dependencies": {"next": "15", "react": "19"}})}, "nextjs"),
+    ({"package.json": json.dumps({"dependencies": {"@nestjs/core": "10", "express": "4"}})}, "nestjs"),  # on Express
+    ({"package.json": json.dumps({"dependencies": {"express": "4"}}), "tsconfig.json": "{}"}, "express"),
+    ({"package.json": json.dumps({"dependencies": {"next": "15", "express": "4"}})}, "nextjs"),  # custom server
+    ({"package.json": json.dumps({"scripts": {"start": "node index.js"}})}, "nodejs"),  # raw Node.js
+    ({"package.json": json.dumps({"devDependencies": {"typescript": "5"}})}, "nodejs"),
+    ({"package.json": "{not json"}, "nodejs"),
+    ({"pyproject.toml": "[project]\ndependencies = ['fastapi>=0.110', 'uvicorn']\n"}, "fastapi"),
+    ({"requirements.txt": "uvicorn\nFastAPI==0.110.0\n"}, "fastapi"),
+    ({"requirements.txt": "fastapi-utils==0.2\n# fastapi\n"}, "python"),  # another package, and a comment
+    ({"requirements.txt": "django\n"}, "python"),  # raw Python
+    ({"setup.py": ""}, "python"),
+    # a Python repo with a package.json for tooling is still Python; a framework dependency beats Python files
+    ({"package.json": json.dumps({"scripts": {"lint": "prettier ."}}), "pyproject.toml": "[project]\n"}, "python"),
+    ({"package.json": json.dumps({"dependencies": {"next": "15"}}), "pyproject.toml": "[project]\n"}, "nextjs"),
+    ({"README.md": ""}, ""),
+    ({"Dockerfile": "FROM node:22\n"}, ""),  # Docker is chosen, never detected
+])
+def test_stack(files, expected):
+    assert stack(files) == expected
+
+
+@pytest.mark.parametrize("files,expected", [
+    ({}, {"dockerfile": False, "docker_port": 0}),
+    ({"Dockerfile": "FROM node:22\nCMD node x\n"}, {"dockerfile": True, "docker_port": 0}),
+    ({"Dockerfile": "FROM node:22\nEXPOSE 8080\nEXPOSE 9229\n"}, {"dockerfile": True, "docker_port": 8080}),
+    ({"Dockerfile": "FROM x\n  expose 4000/tcp\n"}, {"dockerfile": True, "docker_port": 4000}),
+    ({"Dockerfile": "FROM x\n# EXPOSE 1234\n"}, {"dockerfile": True, "docker_port": 0}),  # a comment
+])
+def test_dockerfile(files, expected):
+    s = run_detect(files)
+    assert {k: s[k] for k in ("dockerfile", "docker_port")} == expected
+
+
+# --- per-field suggestions and the scripts of package.json
+
+def test_fields_and_scripts_of_a_package_json():
+    pkg = {"scripts": {"dev": "tsx watch src/server.ts", "build": "tsup", "lint": "eslint src", "format:check": "prettier --check .",
+                       "test": "vitest run", "typecheck": "tsc -b", "start": "node dist/server.js"}}
+    s = run_detect({"package.json": json.dumps(pkg), "pnpm-lock.yaml": ""})
+    assert s["fields"] == {"lint": "pnpm lint", "typecheck": "pnpm typecheck", "format": "pnpm format:check",
+                           "test": "pnpm test", "build": "pnpm build", "run": "pnpm dev"}
+    assert s["checks"] == ["pnpm lint", "pnpm typecheck", "pnpm format:check"]  # the old list is unchanged
+    names = [x["name"] for x in s["scripts"]]
+    assert names == list(pkg["scripts"])  # all of them, in package.json order
+    assert s["scripts"][0] == {"name": "dev", "run": "pnpm dev", "body": "tsx watch src/server.ts"}
+
+
+def test_fields_stay_empty_for_what_the_repo_does_not_have():
+    s = run_detect({"package.json": json.dumps({"scripts": {"build": "tsc"}}), "package-lock.json": ""})
+    assert s["fields"] == {"lint": "", "typecheck": "", "format": "", "test": "", "build": "npm run build", "run": ""}
+    assert s["scripts"] == [{"name": "build", "run": "npm run build", "body": "tsc"}]
+
+
+def test_a_missing_typecheck_script_falls_back_to_tsc():
+    s = run_detect({"package.json": json.dumps({"devDependencies": {"typescript": "5"}}), "tsconfig.json": "{}",
+                    "pnpm-lock.yaml": ""})
+    assert s["fields"]["typecheck"] == "pnpm exec tsc --noEmit"
+
+
+def test_scripts_are_capped_and_non_strings_ignored():
+    scripts = {f"s{i}": "x" * 500 for i in range(120)} | {"weird": {"a": 1}}
+    s = run_detect({"package.json": json.dumps({"scripts": scripts}), "package-lock.json": ""})
+    assert len(s["scripts"]) == 80 and len(s["scripts"][0]["body"]) == 120
+    assert "weird" not in [x["name"] for x in s["scripts"]]
+
+
+def test_not_a_node_repo_has_no_script_suggestions():
+    s = run_detect({"pyproject.toml": "[project]\n"})
+    assert s["scripts"] == [] and set(s["fields"].values()) == {""}
+
+
+@pytest.mark.parametrize("files,dockerfiles,compose", [
+    ({}, [], []),
+    ({"Dockerfile": "", "Dockerfile.dev": "", "api.Dockerfile": "", "notes.md": ""}, ["Dockerfile", "Dockerfile.dev", "api.Dockerfile"], []),
+    ({"docker-compose.yaml": "", "compose.yml": "", "docker-compose.prod.yml": "", "package.json": "{}"}, [],
+     ["compose.yml", "docker-compose.prod.yml", "docker-compose.yaml"]),
+])
+def test_docker_files_at_the_root(files, dockerfiles, compose):
+    s = run_detect(files)
+    assert (s["dockerfiles"], s["compose_files"]) == (dockerfiles, compose)
+    assert s["dockerfile"] == ("Dockerfile" in files)  # only the default name counts as "has a Dockerfile"
+
+
+# --- the contract with the web app's detection (web/src/lib/detect.ts)
+
+def test_detection_matches_the_shared_cases():
+    """tests/data/detect_cases.json is checked by web/tests/detect.test.ts too. After a deliberate change to the
+    detection: PYTHONPATH=. python tests/regen_detect_cases.py, and make the same change in web/src/lib/detect.ts."""
+    from pathlib import Path
+    cases = json.loads((Path(__file__).parent / "data" / "detect_cases.json").read_text())
+    assert len(cases) > 30
+    for c in cases:
+        assert run_detect(c["files"]) == c["expected"], c["name"]

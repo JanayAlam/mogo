@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  ChevronDown,
-  FileUp,
-  Lock,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Sparkles,
-} from "lucide-react";
+import { ChevronDown, FileUp, Lock, Pencil, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "nextjs-toploader/app";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -31,27 +23,28 @@ import {
   useApi,
 } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Repo } from "@/lib/client";
 import { looksSensitive, parseEnv } from "@/lib/dotenv";
 import type { EnvVarInfo } from "@/lib/env";
 import type { Suggestions } from "@/lib/projects";
+import { isDockerStack, isNodeStack, isStack, stackGroups, stackLabel } from "@/lib/stack";
+import { DockerCard, NodeChecksCard, NodeRunCard } from "@/components/repo-run-config";
 import {
   applySuggestions,
   configToForm,
@@ -69,31 +62,52 @@ export function RepoSettings() {
   const { id, repoId } = useParams<{ id: string; repoId: string }>();
   const search = useSearchParams();
   // built_at|error of the profile when learning started; "|" = none yet (the repo was just added)
-  const [waiting, setWaiting] = useState<string | null>(() =>
-    search.get("learning") ? "|" : null,
-  );
-  const stamp = (r: Repo) =>
-    `${r.profile?.built_at ?? ""}|${r.profile?.error ?? ""}`;
+  const [waiting, setWaiting] = useState<string | null>(() => (search.get("learning") ? "|" : null));
+  const stamp = (r: Repo) => `${r.profile?.built_at ?? ""}|${r.profile?.error ?? ""}`;
   const repo = useApi(
     () => api.repo(repoId),
     repoId,
     (r) => waiting !== null && stamp(r) === waiting,
   );
-  const learning =
-    waiting !== null && !!repo.data && stamp(repo.data) === waiting;
+  const learning = waiting !== null && !!repo.data && stamp(repo.data) === waiting;
+
+  // Reads package.json, the Dockerfile and the like from GitHub (no runner) and refreshes the suggestions.
+  const read = async () => {
+    try {
+      await api.detectRepo(repoId);
+      repo.reload();
+    } catch (e) {
+      // from a dropdown menu: nothing around it shows the error, so say it here
+      toast.error("Could not read the repo from GitHub", { description: errorMessage(e) });
+    }
+  };
+  // A repo whose profile has no script list (added before scripts were read, or not learned yet) is read once on
+  // opening, so its dropdowns and type are there without anyone asking. A failure stays quiet: the dropdown offers it.
+  const autoRead = useRef<string | null>(null);
+  const reload = repo.reload;
+  useEffect(() => {
+    const r = repo.data;
+    if (!r || autoRead.current === r.id || r.profile?.suggestions?.scripts !== undefined) return;
+    autoRead.current = r.id;
+    api.detectRepo(r.id).then(reload, () => {});
+  }, [repo.data, reload]);
+
   return (
     <Shell>
-      <BackLink href={`/projects/${id}`}>project</BackLink>
+      <BackLink href={`/projects/${id}`}>Back to project</BackLink>
       <ErrorText error={repo.error} />
       {!repo.data && !repo.error && <FormSkeleton sections={4} />}
       {repo.data && (
         <>
           <RepoForm
-            key={repo.data.id}
+            // The page stays mounted while you are elsewhere and refetches when you come back; a form keeps the state it
+            // was built with. Keyed by the last save, it is built again from the saved settings whenever they changed.
+            key={`${repo.data.id}:${repo.data.updated_at}`}
             repo={repo.data}
             projectId={id}
             learning={learning}
             onSaved={repo.reload}
+            onRead={read}
           />
           <EnvPanel repoId={repo.data.id} />
           <ProfilePanel
@@ -117,11 +131,13 @@ function RepoForm({
   projectId,
   learning,
   onSaved,
+  onRead,
 }: {
   repo: Repo;
   projectId: string;
   learning: boolean;
   onSaved: () => void;
+  onRead: () => Promise<void>;
 }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
@@ -141,8 +157,23 @@ function RepoForm({
   const suggestions = repo.profile?.suggestions;
   const save = useAction();
   const del = useAction();
-  const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) =>
-    setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  const setScript = <K extends keyof ConfigForm["scripts"]>(k: K, v: string) =>
+    setForm((f) => ({ ...f, scripts: { ...f.scripts, [k]: v } }));
+  // Choosing Docker starts from the port the Dockerfile exposes.
+  const chooseStack = (stack: string) =>
+    setForm((f) => ({
+      ...f,
+      stack,
+      dockerPort: f.dockerPort || (stack === "docker" && suggestions?.docker_port ? String(suggestions.docker_port) : ""),
+    }));
+  const node = isNodeStack(form.stack);
+  const docker = isDockerStack(form.stack);
+  // Checks and running only make sense once the repo says what it is: with no type the form asks for nothing yet.
+  const typed = form.stack !== "";
+  const generic = typed && !node && !docker; // Python: the generic Checks and Run the app form
+  const py = form.stack === "python" || form.stack === "fastapi"; // for the examples shown in it
 
   // Compared as saved, so whitespace-only edits are not changes. Leftover env_from is removed by saving.
   const payload = (r: string, b: string, f: ConfigForm) => ({
@@ -152,8 +183,7 @@ function RepoForm({
   });
   const dirty =
     legacy.length > 0 ||
-    JSON.stringify(payload(role, branch, form)) !==
-      JSON.stringify(payload(base.role, base.branch, base.form));
+    JSON.stringify(payload(role, branch, form)) !== JSON.stringify(payload(base.role, base.branch, base.form));
 
   // Shortcut label: "Ctrl S" on the server, the platform's own in the browser (no hydration mismatch).
   const shortcut = useSyncExternalStore(
@@ -201,13 +231,12 @@ function RepoForm({
           toast.success("Repo settings saved");
           onSaved();
         });
-      }}>
+      }}
+    >
       <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <Eyebrow className="tracking-widest text-primary">Repository</Eyebrow>
-          <h1 className="mt-1 font-mono text-2xl font-semibold">
-            {repo.full_name}
-          </h1>
+          <h1 className="mt-1 font-mono text-2xl font-semibold">{repo.full_name}</h1>
         </div>
         <div className="flex items-center gap-2">
           <ConfirmButton
@@ -223,7 +252,8 @@ function RepoForm({
                 await api.deleteRepo(repo.id);
                 router.push(`/projects/${projectId}`);
               })
-            }>
+            }
+          >
             Remove
           </ConfirmButton>
         </div>
@@ -234,41 +264,37 @@ function RepoForm({
           The Mogo GitHub App no longer covers this repo, so runs cannot read it or post reviews.{" "}
           <a
             className="underline underline-offset-2"
-            href={`/api/auth/github/install?next=${encodeURIComponent(`/projects/${projectId}/repos/${repo.id}`)}`}>
+            href={`/api/auth/github/install?next=${encodeURIComponent(`/projects/${projectId}/repos/${repo.id}`)}`}
+          >
             Install Mogo on {repo.full_name}
           </a>
         </p>
       )}
       {legacy.length > 0 && (
         <p className="mb-6 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">
-          This repo still lists GitHub Actions secret names (env_from), which
-          are no longer read: {legacy.join(", ")}. Add their values under
-          Environment variables below. Saving this form removes the old list.
+          This repo still lists GitHub Actions secret names (env_from), which are no longer read: {legacy.join(", ")}.
+          Add their values under Environment variables below. Saving this form removes the old list.
         </p>
       )}
 
       <div className="space-y-6">
         <Card>
           <CardContent className="grid gap-4 p-6 sm:grid-cols-2">
-            <Field
-              label="Role"
-              htmlFor="role"
-              hint="Free text. The agent judges the PR as this kind of repo.">
+            <Field label="Role" htmlFor="role" hint="Free text. The agent judges the PR as this kind of repo.">
               <RoleInput id="role" value={role} onChange={setRole} />
             </Field>
-            <Field
-              label="Source of truth branch"
-              htmlFor="branch"
-              hint="Settings and conventions are read from here.">
-              <Input
-                id="branch"
-                className="font-mono"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-              />
+            <Field label="Source of truth branch" htmlFor="branch" hint="Settings and conventions are read from here.">
+              <Input id="branch" className="font-mono" value={branch} onChange={(e) => setBranch(e.target.value)} />
             </Field>
           </CardContent>
         </Card>
+
+        <StackCard
+          form={form}
+          branch={repo.default_branch}
+          suggestions={suggestions}
+          onChange={chooseStack}
+        />
 
         <Detected
           branch={repo.default_branch}
@@ -283,87 +309,108 @@ function RepoForm({
           }}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Checks</CardTitle>
-            <CardDescription>
-              Run on every review after installing dependencies, one command per
-              line. Any failure requests changes.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Textarea
-              aria-label="Checks"
-              rows={Math.max(3, form.checks.split("\n").length + 1)}
-              className={mono}
-              value={form.checks}
-              onChange={(e) => set("checks", e.target.value)}
-              placeholder={"pnpm lint\npnpm exec tsc --noEmit"}
+        {node && (
+          <>
+            <NodeChecksCard form={form} suggestions={suggestions} onChange={setScript} onRead={onRead} />
+            <NodeRunCard
+              form={form}
+              suggestions={suggestions}
+              onChange={setScript}
+              onUrl={(v) => set("appUrl", v)}
+              onRead={onRead}
             />
-          </CardContent>
-        </Card>
+          </>
+        )}
 
-        <Card>
-          <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
-            <div className="space-y-1.5">
-              <CardTitle>Run the app</CardTitle>
+        {docker && (
+          <DockerCard
+            form={form}
+            branch={repo.default_branch}
+            suggestions={suggestions}
+            onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+            onRead={onRead}
+          />
+        )}
+
+        {generic && (
+          <>
+          <Card>
+            <CardHeader>
+              <CardTitle>Checks</CardTitle>
               <CardDescription>
-                Lets the agent try the feature over HTTP. Off: the PR is
-                reviewed and checked, but not run.
+                Run on every review after installing dependencies, one command per line. Any failure requests changes.
               </CardDescription>
-            </div>
-            <Switch
-              aria-label="Run the app"
-              checked={form.runApp}
-              onCheckedChange={(v) => set("runApp", v)}
-            />
-          </CardHeader>
-          {form.runApp && (
-            <CardContent className="grid gap-4">
-              <Field
-                label="Start script"
-                htmlFor="start"
-                hint="One command per line. Earlier lines run first (start a database, migrate); the last line starts the app and keeps running.">
-                <Textarea
-                  id="start"
-                  rows={Math.max(3, form.startScript.split("\n").length + 1)}
-                  className={mono}
-                  value={form.startScript}
-                  onChange={(e) => set("startScript", e.target.value)}
-                  placeholder={
-                    "docker compose up -d db\npnpm prisma migrate deploy\npnpm dev"
-                  }
-                />
-              </Field>
-              <Field
-                label="Ready URL (optional)"
-                htmlFor="app-url"
-                hint="The agent starts once this answers. Any response counts, even a 404: use a health route for an API, the home page for a frontend. Empty: http://localhost:<PORT>, with this repo's PORT variable, else 3000.">
-                <Input
-                  id="app-url"
-                  className={mono}
-                  value={form.appUrl}
-                  onChange={(e) => set("appUrl", e.target.value)}
-                  placeholder={suggestions?.app_url || "http://localhost:3000"}
-                />
-              </Field>
+            </CardHeader>
+            <CardContent>
+              <Textarea
+                aria-label="Checks"
+                rows={Math.max(3, form.checks.split("\n").length + 1)}
+                className={mono}
+                value={form.checks}
+                onChange={(e) => set("checks", e.target.value)}
+                placeholder={py ? "ruff check .\nmypy ." : "pnpm lint\npnpm exec tsc --noEmit"}
+              />
             </CardContent>
-          )}
-        </Card>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+              <div className="space-y-1.5">
+                <CardTitle>Run the app</CardTitle>
+                <CardDescription>
+                  Lets the agent try the feature over HTTP. Off: the PR is reviewed and checked, but not run.
+                </CardDescription>
+              </div>
+              <Switch aria-label="Run the app" checked={form.runApp} onCheckedChange={(v) => set("runApp", v)} />
+            </CardHeader>
+            {form.runApp && (
+              <CardContent className="grid gap-4">
+                <Field
+                  label="Start script"
+                  htmlFor="start"
+                  hint="One command per line. Earlier lines run first (start a database, migrate); the last line starts the app and keeps running."
+                >
+                  <Textarea
+                    id="start"
+                    rows={Math.max(3, form.startScript.split("\n").length + 1)}
+                    className={mono}
+                    value={form.startScript}
+                    onChange={(e) => set("startScript", e.target.value)}
+                    placeholder={py ? "docker compose up -d db\nalembic upgrade head\nuvicorn app.main:app" : "docker compose up -d db\npnpm prisma migrate deploy\npnpm dev"}
+                  />
+                </Field>
+                <Field
+                  label="Ready URL (optional)"
+                  htmlFor="app-url"
+                  hint="The agent starts once this answers. Any response counts, even a 404: use a health route for an API, the home page for a frontend. Empty: http://localhost:<PORT>, with this repo's PORT variable, else 3000."
+                >
+                  <Input
+                    id="app-url"
+                    className={mono}
+                    value={form.appUrl}
+                    onChange={(e) => set("appUrl", e.target.value)}
+                    placeholder={suggestions?.app_url || "http://localhost:3000"}
+                  />
+                </Field>
+              </CardContent>
+            )}
+          </Card>
+          </>
+        )}
 
         <Card>
           <CardHeader>
             <CardTitle>Agent notes</CardTitle>
             <CardDescription>
-              Read by the agent on top of the project description, the feature
-              and this repo&apos;s role.
+              Read by the agent on top of the project description, the feature and this repo&apos;s role.
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4">
             <Field
               label="Convention files"
               htmlFor="conventions"
-              hint="Paths in the repo, one per line, e.g. CLAUDE.md">
+              hint="Paths in the repo, one per line, e.g. CLAUDE.md"
+            >
               <Textarea
                 id="conventions"
                 rows={2}
@@ -373,64 +420,46 @@ function RepoForm({
               />
             </Field>
             <Field label="Extra rules" htmlFor="rules" hint="One rule per line">
-              <Textarea
-                id="rules"
-                rows={2}
-                value={form.rules}
-                onChange={(e) => set("rules", e.target.value)}
-              />
+              <Textarea id="rules" rows={2} value={form.rules} onChange={(e) => set("rules", e.target.value)} />
             </Field>
-            <Field
-              label="Testing notes"
-              htmlFor="notes"
-              hint="Accounts, how to log in, known limits">
-              <Textarea
-                id="notes"
-                rows={5}
-                value={form.notes}
-                onChange={(e) => set("notes", e.target.value)}
-              />
+            <Field label="Testing notes" htmlFor="notes" hint="Accounts, how to log in, known limits">
+              <Textarea id="notes" rows={5} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
             </Field>
           </CardContent>
         </Card>
 
         <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
           <CollapsibleTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              className="px-0 hover:bg-transparent">
-              <ChevronDown
-                className={cn(
-                  "transition-transform",
-                  !advancedOpen && "-rotate-90",
-                )}
-              />
+            <Button type="button" variant="ghost" className="px-0 hover:bg-transparent">
+              <ChevronDown className={cn("transition-transform", !advancedOpen && "-rotate-90")} />
               Advanced
             </Button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <Card className="mt-2">
               <CardContent className="grid gap-4 p-6">
+                {typed && !docker && (
                 <Field
                   label="Install command"
                   htmlFor="install"
-                  hint="Leave empty to install from the lockfile (pnpm, yarn, npm, bun, uv, poetry or pip). One command per line.">
+                  hint="Leave empty to install from the lockfile (pnpm, yarn, npm, bun, uv, poetry or pip). One command per line."
+                >
                   <Textarea
                     id="install"
                     rows={2}
                     className={mono}
                     value={form.install}
                     onChange={(e) => set("install", e.target.value)}
-                    placeholder={
-                      suggestions?.install || "pnpm install --frozen-lockfile"
-                    }
+                    placeholder={suggestions?.install || "pnpm install --frozen-lockfile"}
                   />
                 </Field>
+                )}
+                {generic && (
                 <Field
                   label="Test command"
                   htmlFor="test-cmd"
-                  hint="Tells the agent how to run the tests. Add it to Checks as well if failing tests should request changes.">
+                  hint="Tells the agent how to run the tests. Add it to Checks as well if failing tests should request changes."
+                >
                   <Input
                     id="test-cmd"
                     className={mono}
@@ -438,10 +467,13 @@ function RepoForm({
                     onChange={(e) => set("testCmd", e.target.value)}
                   />
                 </Field>
+                )}
+                {typed && !docker && (
                 <Field
                   label="Stop command"
                   htmlFor="stop-cmd"
-                  hint="Runs at the end, e.g. docker compose down. Only matters for local CLI runs: the Actions machine is thrown away.">
+                  hint="Runs at the end, e.g. docker compose down. Only matters for local CLI runs: the Actions machine is thrown away."
+                >
                   <Input
                     id="stop-cmd"
                     className={mono}
@@ -449,17 +481,13 @@ function RepoForm({
                     onChange={(e) => set("stopCmd", e.target.value)}
                   />
                 </Field>
+                )}
                 <div className="flex items-center gap-3">
-                  <Switch
-                    id="allow-forks"
-                    checked={form.allowForks}
-                    onCheckedChange={(v) => set("allowForks", v)}
-                  />
+                  <Switch id="allow-forks" checked={form.allowForks} onCheckedChange={(v) => set("allowForks", v)} />
                   <Label htmlFor="allow-forks">
                     Allow PRs from forks{" "}
                     <span className="font-normal text-muted-foreground">
-                      (their code can read this repo&apos;s environment
-                      variables)
+                      (their code can read this repo&apos;s environment variables)
                     </span>
                   </Label>
                 </div>
@@ -476,29 +504,23 @@ function RepoForm({
           <div
             role="region"
             aria-label="Unsaved changes"
-            className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur animate-in fade-in slide-in-from-bottom-4">
+            className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 backdrop-blur animate-in fade-in slide-in-from-bottom-4"
+          >
             <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-3">
               <div className="min-w-0 text-sm">
                 <p className="font-medium">
-                  {legacy.length > 0
-                    ? "Save to remove the old env_from list"
-                    : "Unsaved changes"}
+                  {legacy.length > 0 ? "Save to remove the old env_from list" : "Unsaved changes"}
                 </p>
                 {save.error ? (
                   <p className="text-destructive">{save.error}</p>
                 ) : (
                   <p className="text-xs text-muted-foreground">
-                    Repo settings above. Environment variables save on their
-                    own.
+                    Repo settings above. Environment variables save on their own.
                   </p>
                 )}
               </div>
               <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={discard}
-                  disabled={save.busy}>
+                <Button type="button" variant="outline" onClick={discard} disabled={save.busy}>
                   Discard
                 </Button>
                 <Button loading={save.busy}>
@@ -517,6 +539,68 @@ function RepoForm({
 }
 
 /** Settings read from the branch, offered while the form's checks and start script are still empty. */
+const NO_STACK = "none"; // a Select item cannot have an empty value
+
+/**
+ * What kind of app the repo is (one pick). Detected from the source branch the first time it is read; it decides what
+ * the rest of the form asks for (package.json scripts, or a Docker file).
+ */
+function StackCard({
+  form,
+  suggestions,
+  onChange,
+}: {
+  form: ConfigForm;
+  branch: string;
+  suggestions: Suggestions | null | undefined;
+  onChange: (stack: string) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Run the project</CardTitle>
+        <CardDescription>
+          How this repo is run. New repos run with Docker (Docker Compose by default); if the repo looks like something
+          else, it is suggested here. It decides how the app is checked and started.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <Field label={<span className="sr-only">Run the project</span>} htmlFor="stack">
+          <Select value={form.stack || NO_STACK} onValueChange={(v) => onChange(v === NO_STACK ? "" : v)}>
+            <SelectTrigger id="stack" className="sm:max-w-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_STACK}>Not set</SelectItem>
+              {stackGroups().map((g) => (
+                <SelectGroup key={g.label}>
+                  <SelectLabel>{g.label}</SelectLabel>
+                  {g.stacks.map((o) => (
+                    <SelectItem key={o.id} value={o.id}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {!form.stack && (
+          <p className="text-sm text-muted-foreground">Choose a type to set up its checks and how the app runs.</p>
+        )}
+        {typeof suggestions?.stack === "string" && isStack(suggestions.stack) && suggestions.stack !== form.stack && (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+            <span>Detected from the repo: {stackLabel(suggestions.stack)}.</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => onChange(suggestions.stack as string)}>
+              Use {stackLabel(suggestions.stack)}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function Detected({
   branch,
   learning,
@@ -535,23 +619,19 @@ function Detected({
       <Card className="border-primary/30">
         <CardContent className="flex items-center gap-3 p-4 text-sm text-muted-foreground">
           <RefreshCw className="h-4 w-4 animate-spin text-primary" />
-          Reading {branch}: settings found in package.json and the lockfile will
-          be suggested here.
+          Reading {branch}: settings found in package.json and the lockfile will be suggested here.
         </CardContent>
       </Card>
     );
   }
-  const useful =
-    suggestions &&
-    (suggestions.checks.length || suggestions.start || suggestions.test_cmd);
-  if (!useful || form.checks.trim() || form.startScript.trim()) return null;
+  const useful = suggestions && (suggestions.checks.length || suggestions.start || suggestions.test_cmd);
+  const filled = [form.checks, form.startScript, ...Object.values(form.scripts)].some((v) => v.trim());
+  if (!useful || filled || !form.stack || isDockerStack(form.stack)) return null;
   const row = (label: string, value: string) =>
     value && (
       <div className="flex gap-3">
         <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-        <code className="font-mono text-xs leading-5 whitespace-pre-wrap">
-          {value}
-        </code>
+        <code className="font-mono text-xs leading-5 whitespace-pre-wrap">{value}</code>
       </div>
     );
   return (
@@ -562,8 +642,7 @@ function Detected({
             <Sparkles className="h-4 w-4 text-primary" /> Detected on {branch}
           </CardTitle>
           <CardDescription>
-            From package.json, the lockfile and .env.example. Nothing is saved
-            until you click Save.
+            From package.json, the lockfile and .env.example. Nothing is saved until you click Save.
           </CardDescription>
         </div>
         <Button type="button" onClick={() => onApply(suggestions)}>
@@ -571,18 +650,15 @@ function Detected({
         </Button>
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
-        {row(
-          "Install",
-          suggestions.install && `${suggestions.install}  (automatic)`,
-        )}
+        {row("Install", suggestions.install && `${suggestions.install}  (automatic)`)}
         {row("Checks", suggestions.checks.join("\n"))}
         {row("Tests", suggestions.test_cmd)}
         {row("Start", suggestions.start)}
         {row("Ready URL", suggestions.app_url)}
         {suggestions.env_names.length > 0 && (
           <p className="pt-1 text-xs text-muted-foreground">
-            .env.example lists {suggestions.env_names.length} variables: import
-            your .env under Environment variables below.
+            .env.example lists {suggestions.env_names.length} variables: import your .env under Environment variables
+            below.
           </p>
         )}
       </CardContent>
@@ -609,18 +685,12 @@ function EnvPanel({ repoId }: { repoId: string }) {
         <div className="max-w-2xl space-y-1.5">
           <CardTitle>Environment variables</CardTitle>
           <CardDescription>
-            Only this repo&apos;s commands get them. Sensitive values are
-            encrypted, can&apos;t be shown again (only replaced) and are masked
-            in logs and reviews. Use test credentials: the PR&apos;s code can
-            read them.
+            Only this repo&apos;s commands get them. Sensitive values are encrypted, can&apos;t be shown again (only
+            replaced) and are masked in logs and reviews. Use test credentials: the PR&apos;s code can read them.
           </CardDescription>
         </div>
         <div className="flex gap-2">
-          <EnvImportButton
-            repoId={repoId}
-            vars={list.data?.vars ?? []}
-            onDone={list.reload}
-          />
+          <EnvImportButton repoId={repoId} vars={list.data?.vars ?? []} onDone={list.reload} />
           <Button type="button" onClick={() => setEditing("new")}>
             <Plus /> Add variable
           </Button>
@@ -629,10 +699,8 @@ function EnvPanel({ repoId }: { repoId: string }) {
       <CardContent>
         {keyMissing && (
           <p className="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            MOGO_SECRET_KEY is not set on the web app, so sensitive variables
-            can&apos;t be saved (plain ones can). Set the same key on the web
-            app and as an Actions secret of the runner repo (openssl rand
-            -base64 32).
+            MOGO_SECRET_KEY is not set on the web app, so sensitive variables can&apos;t be saved (plain ones can). Set
+            the same key on the web app and as an Actions secret of the runner repo (openssl rand -base64 32).
           </p>
         )}
         <ErrorText error={list.error || action.error} />
@@ -648,16 +716,13 @@ function EnvPanel({ repoId }: { repoId: string }) {
             {list.data.vars.map((v) => (
               <div
                 key={v.name}
-                className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_6rem_auto] items-center gap-3 px-3 py-2">
+                className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)_6rem_auto] items-center gap-3 px-3 py-2"
+              >
                 <span className="truncate font-mono text-sm" title={v.name}>
                   {v.name}
                 </span>
-                <span
-                  className="truncate font-mono text-xs text-muted-foreground"
-                  title={v.value ?? undefined}>
-                  {v.sensitive
-                    ? `•••••••• · set ${timeAgo(v.updated_at)}`
-                    : v.value}
+                <span className="truncate font-mono text-xs text-muted-foreground" title={v.value ?? undefined}>
+                  {v.sensitive ? `•••••••• · set ${timeAgo(v.updated_at)}` : v.value}
                 </span>
                 <Switch
                   aria-label={`${v.name} is sensitive`}
@@ -676,11 +741,7 @@ function EnvPanel({ repoId }: { repoId: string }) {
                   }}
                 />
                 <span className="flex w-40 justify-end gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setEditing(v)}>
+                  <Button type="button" size="sm" variant="outline" onClick={() => setEditing(v)}>
                     <Pencil /> {v.sensitive ? "Replace" : "Edit"}
                   </Button>
                   <ConfirmButton
@@ -696,7 +757,8 @@ function EnvPanel({ repoId }: { repoId: string }) {
                         await api.deleteEnvVar(repoId, v.name);
                         list.reload();
                       })
-                    }>
+                    }
+                  >
                     Delete
                   </ConfirmButton>
                 </span>
@@ -705,19 +767,11 @@ function EnvPanel({ repoId }: { repoId: string }) {
           </div>
         )}
         {list.data?.vars.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            No variables yet. Import a .env file or add them one by one.
-          </p>
+          <p className="text-sm text-muted-foreground">No variables yet. Import a .env file or add them one by one.</p>
         )}
       </CardContent>
       <EnvVarDialog
-        key={
-          editing === "new"
-            ? "new"
-            : editing
-              ? `${editing.name}:${editing.sensitive}`
-              : "closed"
-        }
+        key={editing === "new" ? "new" : editing ? `${editing.name}:${editing.sensitive}` : "closed"}
         repoId={repoId}
         editing={editing}
         keyMissing={keyMissing}
@@ -750,9 +804,7 @@ function EnvVarDialog({
   // The list sends no value for sensitive variables: the stored one is secret.
   const storedSecret = !!current && current.value === null;
   const [name, setName] = useState(current?.name ?? "");
-  const [value, setValue] = useState(
-    storedSecret ? "" : (current?.value ?? ""),
-  );
+  const [value, setValue] = useState(storedSecret ? "" : (current?.value ?? ""));
   const [sensitive, setSensitive] = useState(current?.sensitive ?? false);
   const [touched, setTouched] = useState(!isNew); // pick "sensitive" from the name until the user decides
   const action = useAction();
@@ -762,18 +814,13 @@ function EnvVarDialog({
     <Modal
       open={editing !== null}
       onClose={onClose}
-      title={
-        !current
-          ? "Add variable"
-          : storedSecret
-            ? `Replace ${current.name}`
-            : `Edit ${current.name}`
-      }
+      title={!current ? "Add variable" : storedSecret ? `Replace ${current.name}` : `Edit ${current.name}`}
       description={
         storedSecret && !sensitive
           ? "A sensitive value can't be revealed. Enter a new value to make it plain."
           : undefined
-      }>
+      }
+    >
       <form
         className="space-y-4"
         onSubmit={(e) => {
@@ -788,7 +835,8 @@ function EnvVarDialog({
             onClose();
             onSaved();
           });
-        }}>
+        }}
+      >
         <Field label="Name" htmlFor="env-name">
           <Input
             id="env-name"
@@ -807,11 +855,8 @@ function EnvVarDialog({
         <Field
           label="Value"
           htmlFor="env-value"
-          hint={
-            storedSecret && sensitive
-              ? "Leave empty to keep the current value."
-              : undefined
-          }>
+          hint={storedSecret && sensitive ? "Leave empty to keep the current value." : undefined}
+        >
           <Input
             id="env-value"
             className="font-mono"
@@ -834,16 +879,12 @@ function EnvVarDialog({
             }}
           />
           <Label htmlFor="env-sensitive">
-            Sensitive{" "}
-            <span className="font-normal text-muted-foreground">
-              (encrypted, hidden after saving)
-            </span>
+            Sensitive <span className="font-normal text-muted-foreground">(encrypted, hidden after saving)</span>
           </Label>
         </div>
         {sensitive && keyMissing && (
           <p className="text-xs text-warning">
-            MOGO_SECRET_KEY is not set: sensitive variables can&apos;t be saved
-            yet.
+            MOGO_SECRET_KEY is not set: sensitive variables can&apos;t be saved yet.
           </p>
         )}
         <ErrorText error={action.error} />
@@ -866,15 +907,7 @@ interface PendingImport {
 }
 
 /** Pick a .env file, preview names (new / replaced, sensitive or not), then import. Values are never shown. */
-function EnvImportButton({
-  repoId,
-  vars,
-  onDone,
-}: {
-  repoId: string;
-  vars: EnvVarInfo[];
-  onDone: () => void;
-}) {
+function EnvImportButton({ repoId, vars, onDone }: { repoId: string; vars: EnvVarInfo[]; onDone: () => void }) {
   const [pending, setPending] = useState<PendingImport | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const action = useAction();
@@ -915,10 +948,7 @@ function EnvImportButton({
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        onClick={() => fileInput.current?.click()}>
+      <Button type="button" variant="outline" onClick={() => fileInput.current?.click()}>
         <FileUp /> Import .env file
       </Button>
       <input
@@ -938,7 +968,8 @@ function EnvImportButton({
         onClose={() => setPending(null)}
         title={`Import ${pending?.file ?? ""}`}
         description="Existing names get the new value; variables not in the file are kept. Names with a lock are stored as sensitive (change it later in the list)."
-        wide>
+        wide
+      >
         {pending && (
           <div className="space-y-4 text-sm">
             {added.length > 0 && (
@@ -949,26 +980,18 @@ function EnvImportButton({
             )}
             {replaced.length > 0 && (
               <div className="space-y-2">
-                <p className="font-medium text-warning">
-                  Replace ({replaced.length})
-                </p>
+                <p className="font-medium text-warning">Replace ({replaced.length})</p>
                 {names(replaced)}
               </div>
             )}
             {pending.problems.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Skipped:{" "}
-                {pending.problems
-                  .map((p) => `line ${p.line} (${p.reason})`)
-                  .join(", ")}
+                Skipped: {pending.problems.map((p) => `line ${p.line} (${p.reason})`).join(", ")}
               </p>
             )}
             <ErrorText error={action.error} />
             <div className="flex justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setPending(null)}>
+              <Button type="button" variant="outline" onClick={() => setPending(null)}>
                 Cancel
               </Button>
               <Button
@@ -982,9 +1005,7 @@ function EnvImportButton({
                       toast.success("Variables imported", {
                         description:
                           `${r.added.length} added, ${r.replaced.length} replaced, ${r.sensitive.length} sensitive` +
-                          (r.skipped.length
-                            ? `, ${r.skipped.length} line(s) skipped`
-                            : ""),
+                          (r.skipped.length ? `, ${r.skipped.length} line(s) skipped` : ""),
                       });
                       onDone();
                     } catch (e) {
@@ -994,7 +1015,8 @@ function EnvImportButton({
                       throw e;
                     }
                   })
-                }>
+                }
+              >
                 Import {pending.entries.length} variables
               </Button>
             </div>
@@ -1007,15 +1029,7 @@ function EnvImportButton({
 
 // ------------------------------------------------------------------ learned conventions
 
-function ProfilePanel({
-  repo,
-  waiting,
-  onRelearn,
-}: {
-  repo: Repo;
-  waiting: boolean;
-  onRelearn: () => void;
-}) {
+function ProfilePanel({ repo, waiting, onRelearn }: { repo: Repo; waiting: boolean; onRelearn: () => void }) {
   const action = useAction();
   const p = repo.profile;
   return (
@@ -1024,9 +1038,8 @@ function ProfilePanel({
         <div className="space-y-1.5">
           <CardTitle>Conventions learned from {repo.default_branch}</CardTitle>
           <CardDescription>
-            Folders, file names and type definitions of the source of truth
-            branch. Refreshed automatically when the branch moves; the built-in
-            checks compare each PR with this.
+            Folders, file names and type definitions of the source of truth branch. Refreshed automatically when the
+            branch moves; the built-in checks compare each PR with this.
           </CardDescription>
         </div>
         <Button
@@ -1038,7 +1051,8 @@ function ProfilePanel({
               await api.relearn(repo.id);
               onRelearn();
             })
-          }>
+          }
+        >
           <RefreshCw />
           {waiting ? "Re-learning…" : "Re-learn now"}
         </Button>
@@ -1066,8 +1080,7 @@ function ProfilePanel({
           </>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Not learned yet. It happens when a repo is added, on the first
-            review, or now with Re-learn.
+            Not learned yet. It happens when a repo is added, on the first review, or now with Re-learn.
           </p>
         )}
       </CardContent>

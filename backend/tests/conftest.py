@@ -45,7 +45,7 @@ def seed_user(sf, login="alice", llm=True, **conn) -> str:
         s.flush()
         if llm:
             s.add(LlmConnection(**{"user_id": u.id, "provider": "deepseek", "name": "DeepSeek", "active": True, "position": 1,
-                                   "base_url": "https://api.deepseek.com", "model": "deepseek-chat", **conn}))
+                                   "base_url": "https://api.deepseek.com", "model": "deepseek-flash", **conn}))
         s.commit()
         return u.id
 

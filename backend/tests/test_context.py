@@ -112,14 +112,14 @@ def test_the_run_gets_the_owners_switched_on_connections_in_order(sf, two_repos)
         s.commit()
     rid = make_feature(sf, two_repos)
     chain = load_context(sf, rid).owner.connections
-    assert [(c.model, c.api_key_enc) for c in chain] == [("deepseek-chat", None), ("gpt-4.1", "v1:x")]
+    assert [(c.model, c.api_key_enc) for c in chain] == [("deepseek-flash", None), ("gpt-4.1", "v1:x")]
 
     with sf() as s:  # the owner drags OpenAI first and switches Local on
         for c in s.query(LlmConnection):
             c.position = {"openai": 1, "deepseek": 2, "custom": 3}[c.provider]
             c.active = True
         s.commit()
-    assert [c.model for c in load_context(sf, rid).owner.connections] == ["gpt-4.1", "deepseek-chat", "qwen"]
+    assert [c.model for c in load_context(sf, rid).owner.connections] == ["gpt-4.1", "deepseek-flash", "qwen"]
 
     with sf() as s:  # nothing on: the runner reports it
         for c in s.query(LlmConnection):
