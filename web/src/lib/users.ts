@@ -3,7 +3,7 @@ import { decryptSecret, encryptSecret, secretKey } from '@/lib/env'
 
 /**
  * Users (table users). Encrypted columns use the repo_env format with additional data "user:<id>:<name>"
- * (github_token, github_refresh, llm_api_key); the runner (backend/mogo/llm/provider.py) decrypts the LLM key.
+ * (github_token, github_refresh). LLM connections have their own module, lib/llm.ts.
  */
 const aad = (userId: string) => `user:${userId}`
 
@@ -73,33 +73,3 @@ export async function loadGitHubTokens(userId: string): Promise<StoredGitHubToke
     refresh: open('github_refresh', u.github_refresh_enc, valid(u.github_refresh_expires_at, 0)),
   }
 }
-
-// --- the user's LLM
-
-export interface LlmSettings {
-  base_url: string
-  model: string
-  has_key: boolean
-}
-
-export async function getLlmSettings(userId: string): Promise<LlmSettings> {
-  const u = await db().user.findUnique({
-    where: { id: userId },
-    select: { llm_base_url: true, llm_model: true, llm_api_key_enc: true },
-  })
-  return { base_url: u?.llm_base_url ?? '', model: u?.llm_model ?? '', has_key: !!u?.llm_api_key_enc }
-}
-
-/** `api_key`: a string sets it, null removes it, undefined keeps it. The key is never read back. */
-export async function setLlmSettings(
-  userId: string,
-  s: { base_url: string; model: string; api_key?: string | null },
-): Promise<void> {
-  const key =
-    s.api_key === undefined
-      ? {} // keep the stored key
-      : { llm_api_key_enc: s.api_key ? encryptSecret(secretKey(), aad(userId), 'llm_api_key', s.api_key) : null }
-  await db().user.update({ where: { id: userId }, data: { llm_base_url: s.base_url, llm_model: s.model, ...key } })
-}
-
-export const llmConfigured = (s: LlmSettings) => !!(s.base_url && s.model)

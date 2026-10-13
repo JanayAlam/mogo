@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from mogo.config import RepoConfig, Settings
-from mogo.models import Project, Repo, RepoEnvVar, User, make_session_factory
+from mogo.models import LlmConnection, Project, Repo, RepoEnvVar, User, make_session_factory
 
 
 FAKE_DB_URL = "postgresql://user:pw@localhost:5432/db"
@@ -34,14 +34,18 @@ def sf(tmp_path):
     return make_session_factory(f"sqlite:///{tmp_path / 'test.db'}")
 
 
-def seed_user(sf, login="alice", **llm) -> str:
-    """A signed-in user with an LLM set up (DeepSeek, no key stored). Returns the user id."""
+def seed_user(sf, login="alice", llm=True, **conn) -> str:
+    """A signed-in user. With `llm` (default) they have DeepSeek switched on, no key stored; `conn` overrides its
+    columns. Returns the user id."""
     with sf() as s:
         if u := s.query(User).filter_by(login=login).first():
             return u.id
-        u = User(github_id=abs(hash(login)) % 10**9, login=login,
-                 **{"llm_base_url": "https://api.deepseek.com", "llm_model": "deepseek-chat", **llm})
+        u = User(github_id=abs(hash(login)) % 10**9, login=login)
         s.add(u)
+        s.flush()
+        if llm:
+            s.add(LlmConnection(**{"user_id": u.id, "provider": "deepseek", "name": "DeepSeek", "active": True, "position": 1,
+                                   "base_url": "https://api.deepseek.com", "model": "deepseek-chat", **conn}))
         s.commit()
         return u.id
 

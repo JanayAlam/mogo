@@ -20,15 +20,30 @@ def _uuid() -> str:
 
 
 class User(Base):
-    """Signed in with GitHub (web app). The LLM key: AES-256-GCM, additional data "user:<id>:llm_api_key"."""
+    """Signed in with GitHub (web app). Their LLMs are in LlmConnection."""
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     github_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     login: Mapped[str] = mapped_column(String(100))
-    llm_base_url: Mapped[str] = mapped_column(String(500), default="")
-    llm_model: Mapped[str] = mapped_column(String(200), default="")
-    llm_api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class LlmConnection(Base):
+    """One of a user's LLMs (any OpenAI-compatible API). The active ones form a fallback chain ordered by `position`:
+    a run tries them first to last.
+    The key: AES-256-GCM, additional data "user:<user id>:llm_api_key"."""
+    __tablename__ = "llm_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    provider: Mapped[str] = mapped_column(String(20), default="custom")
+    name: Mapped[str] = mapped_column(String(100), default="")
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    api_key_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 

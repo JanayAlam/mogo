@@ -2,14 +2,14 @@ import * as Sentry from '@sentry/nextjs'
 
 import { dispatchWorkflow } from '@/lib/github'
 import { installedRepos } from '@/lib/github-app'
+import { activeLlmModel } from '@/lib/llm'
 import { logger } from '@/lib/log'
 import { setRepoInstallation } from '@/lib/projects'
 import { insertRun, markRunFailed, type RunRow } from '@/lib/runs'
-import { getLlmSettings, llmConfigured } from '@/lib/users'
 
 /** Why runs cannot start for this user, or null. Checked before anything is queued. */
 export async function startProblem(userId: string, repos: string[]): Promise<string | null> {
-  if (!llmConfigured(await getLlmSettings(userId))) return 'set up your LLM first (Settings > LLM)'
+  if (!(await activeLlmModel(userId))) return 'switch on an LLM connection first (Settings > LLM)'
   const lost = await recheckAccess(userId, repos)
   if (lost.length) return `Mogo is no longer installed on ${lost.join(', ')}, or your GitHub account lost access`
   return null

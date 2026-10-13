@@ -5,7 +5,7 @@ import httpx
 
 from mogo.github.client import GitHubClient
 from mogo.config import RepoConfig
-from mogo.models import Repo, Run
+from mogo.models import LlmConnection, Repo, Run, RunEvent
 from mogo.runner.pipeline import execute_run
 from conftest import FakeLLM, seed_repos, tool_call
 
@@ -196,11 +196,118 @@ def test_token_is_minted_for_the_repos_installation(settings, sf, fake_app_token
 
 def test_owner_without_llm_fails_before_touching_github(settings, sf, fake_app_token):
     from conftest import seed_user
-    seed_user(sf, llm_model="")
+    seed_user(sf, llm=False)
     seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
     rid = make_run(sf)
     execute_run(rid, settings, sf, gh=fake_github([]), checkout=fake_checkout)
     with sf() as s:
         r = s.get(Run, rid)
-        assert r.status == "failed" and "has not set up an LLM" in r.error
+        assert r.status == "failed" and "no LLM switched on" in r.error
     assert fake_app_token == []
+
+
+# --- the owner's LLMs are tried in order; a failing one hands over to the next
+
+def add_connections(sf, *specs):
+    """Replace the seeded LLM with these (provider, model, base_url) connections, in this order, all switched on."""
+    from conftest import seed_user
+    uid = seed_user(sf, llm=False)
+    with sf() as s:
+        s.query(LlmConnection).delete()
+        for i, (provider, model, url) in enumerate(specs, 1):
+            s.add(LlmConnection(user_id=uid, provider=provider, name=provider, active=True, position=i,
+                                base_url=url, model=model))
+        s.commit()
+
+
+def by_model(models):
+    """llm_factory: the client scripted for the model of each connection (also records the order they are asked)."""
+    asked = []
+
+    def factory(choice):
+        asked.append(choice.model)
+        return models[choice.model]
+    return factory, asked
+
+
+class Down:
+    """A client whose API is unreachable."""
+    def __init__(self):
+        import openai
+        err = openai.APIConnectionError(request=httpx.Request("POST", "https://down.example/v1/chat/completions"))
+
+        def boom(**_kw):
+            raise err
+        from types import SimpleNamespace
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=boom))
+
+
+SUBMIT = [[tool_call("submit_report", {"summary": "ok"})]]
+
+
+def test_a_failing_llm_falls_back_to_the_next(settings, sf, fake_app_token):
+    add_connections(sf, ("custom", "local-model", "https://a.trycloudflare.com/v1"),
+                    ("openai", "gpt-4.1", "https://api.openai.com/v1"))
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    factory, asked = by_model({"local-model": Down(), "gpt-4.1": FakeLLM(SUBMIT)})
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=factory, checkout=fake_checkout)
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "succeeded", r.error
+        assert r.llm_used == "gpt-4.1 @ api.openai.com"  # the one that did the review
+        log = [e.message for e in s.query(RunEvent).filter_by(run_id=rid)]
+    assert asked == ["local-model", "gpt-4.1"]
+    assert any("local-model" in m and "failed" in m and "trying the next one" in m for m in log)
+
+
+def test_a_model_that_never_reports_falls_back_too(settings, sf, fake_app_token):
+    add_connections(sf, ("deepseek", "weak", "https://api.deepseek.com"), ("openai", "gpt-4.1", "https://api.openai.com/v1"))
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    factory, asked = by_model({"weak": FakeLLM([]), "gpt-4.1": FakeLLM(SUBMIT)})  # empty replies: AgentFailed
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=factory, checkout=fake_checkout)
+    with sf() as s:
+        assert s.get(Run, rid).status == "succeeded"
+    assert asked == ["weak", "gpt-4.1"]
+
+
+def test_the_first_llm_that_works_ends_the_chain(settings, sf, fake_app_token):
+    add_connections(sf, ("openai", "gpt-4.1", "https://api.openai.com/v1"), ("deepseek", "spare", "https://api.deepseek.com"))
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    factory, asked = by_model({"gpt-4.1": FakeLLM(SUBMIT), "spare": Down()})
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=factory, checkout=fake_checkout)
+    with sf() as s:
+        assert s.get(Run, rid).status == "succeeded"
+    assert asked == ["gpt-4.1"]
+
+
+def test_when_every_llm_fails_the_run_fails_with_each_reason(settings, sf, fake_app_token):
+    add_connections(sf, ("custom", "local-model", "https://a.trycloudflare.com/v1"),
+                    ("openai", "gpt-4.1", "https://api.openai.com/v1"))
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    factory, asked = by_model({"local-model": Down(), "gpt-4.1": FakeLLM([])})
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=factory, checkout=fake_checkout)
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "failed"
+        assert "every LLM failed" in r.error and "local-model" in r.error and "gpt-4.1" in r.error
+    assert asked == ["local-model", "gpt-4.1"]
+
+
+def test_an_error_outside_the_llm_does_not_fall_back(settings, sf, fake_app_token):
+    add_connections(sf, ("openai", "gpt-4.1", "https://api.openai.com/v1"), ("deepseek", "spare", "https://api.deepseek.com"))
+    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
+    asked = []
+
+    def factory(choice):
+        asked.append(choice.model)
+        raise RuntimeError("bug in our code")
+    rid = make_run(sf)
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=factory, checkout=fake_checkout)
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "failed" and "bug in our code" in r.error
+    assert asked == ["gpt-4.1"]  # the second was never tried

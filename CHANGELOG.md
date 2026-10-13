@@ -14,8 +14,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Reviews are posted by the GitHub App (`mogo[bot]`) with an installation token per run, scoped to the one repo
   (Contents: read, Pull requests: write). The repo picker lists repos of installations the user can access; access
   is checked again before each run, and the App's webhook marks repos it no longer covers.
-- Each user sets their own LLM under Settings: any OpenAI-compatible base URL, model, and an API key stored encrypted
-  (write-only). Runs use the project owner's LLM.
+- Each user adds their own LLM connections under Settings (`llm_connections`, migration 006): OpenAI, Claude, DeepSeek,
+  OpenRouter or Local / Custom (any OpenAI-compatible server, with tunnel steps for Cloudflare and ngrok). Keys are
+  stored encrypted (write-only), checked with the provider when saved, and a connection can be tested, switched on or
+  off, edited and deleted. The LLM that users had under the old single setting becomes their first connection.
+- LLM fallback (`llm_connections.position`, migration 007): the switched-on connections are an ordered chain, set by
+  dragging the cards in Settings. A run reviews with the first one and, when it fails, starts over with the next; when
+  all fail the run fails with each reason. Only LLM failures fall back (API errors, timeouts, a model that never
+  submits a report), and the retries inside one client are reduced to one while there is a fallback.
 
 - Projects: group repos into a project, give each repo a free-text role (`backend`, `frontend`, `admin-frontend`, ...)
   and a source of truth branch. Repo settings (commands, env, conventions, notes) are edited in the web app

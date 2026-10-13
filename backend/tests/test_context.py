@@ -3,7 +3,7 @@ import pytest
 
 from mogo.config import RepoConfig
 from mogo.context import ContextError, load_context
-from mogo.models import Feature, FeatureRepo, Project, Repo, Run
+from mogo.models import Feature, FeatureRepo, LlmConnection, Project, Repo, Run
 from mogo.runner.pipeline import execute_run
 from mogo.tools.import_repos import import_repos
 from conftest import FakeLLM, seed_repos, seed_user, tool_call
@@ -98,3 +98,31 @@ def test_import_repos_is_idempotent(sf, tmp_path):
     with sf() as s:
         (p,), (r,) = s.query(Project).all(), s.query(Repo).all()
         assert (p.description, r.role, r.config["gates"]) == ("Shop", "backend", ["make check"])
+
+
+def test_the_run_gets_the_owners_switched_on_connections_in_order(sf, two_repos):
+    uid = seed_user(sf)  # DeepSeek, on, position 1
+    with sf() as s:
+        s.add_all([
+            LlmConnection(user_id=uid, provider="openai", name="OpenAI", active=True, position=2,
+                          base_url="https://api.openai.com/v1", model="gpt-4.1", api_key_enc="v1:x"),
+            LlmConnection(user_id=uid, provider="custom", name="Local", active=False, position=3,
+                          base_url="https://a.trycloudflare.com/v1", model="qwen"),  # off: never used
+        ])
+        s.commit()
+    rid = make_feature(sf, two_repos)
+    chain = load_context(sf, rid).owner.connections
+    assert [(c.model, c.api_key_enc) for c in chain] == [("deepseek-chat", None), ("gpt-4.1", "v1:x")]
+
+    with sf() as s:  # the owner drags OpenAI first and switches Local on
+        for c in s.query(LlmConnection):
+            c.position = {"openai": 1, "deepseek": 2, "custom": 3}[c.provider]
+            c.active = True
+        s.commit()
+    assert [c.model for c in load_context(sf, rid).owner.connections] == ["gpt-4.1", "deepseek-chat", "qwen"]
+
+    with sf() as s:  # nothing on: the runner reports it
+        for c in s.query(LlmConnection):
+            c.active = False
+        s.commit()
+    assert load_context(sf, rid).owner.connections == ()

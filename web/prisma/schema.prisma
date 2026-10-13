@@ -180,14 +180,32 @@ model User {
   github_token_expires_at   DateTime? @db.Timestamptz(6)
   github_refresh_enc        String?
   github_refresh_expires_at DateTime? @db.Timestamptz(6)
-  llm_base_url              String    @default("") @db.VarChar(500)
-  llm_model                 String    @default("") @db.VarChar(200)
-  llm_api_key_enc           String?
   created_at                DateTime  @default(now()) @db.Timestamptz(6)
   last_login_at             DateTime  @default(now()) @db.Timestamptz(6)
   projects                  Project[]
   runs                      Run[]
   sessions                  Session[]
+  llmConnections            LlmConnection[]
 
   @@map("users")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model LlmConnection {
+  id          String   @id @default(dbgenerated("(gen_random_uuid())::text")) @db.VarChar(36)
+  user_id     String   @db.VarChar(36)
+  provider    String   @db.VarChar(20)
+  name        String   @db.VarChar(100)
+  base_url    String   @db.VarChar(500)
+  model       String   @db.VarChar(200)
+  api_key_enc String?
+  active      Boolean  @default(false)
+  position    Int      @default(0)
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+  updated_at  DateTime @default(now()) @db.Timestamptz(6)
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "ix_llm_connections_user_id")
+  @@index([user_id, position], map: "ix_llm_connections_user_position")
+  @@map("llm_connections")
 }

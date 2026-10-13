@@ -7,9 +7,10 @@ import tempfile
 from pathlib import Path
 
 import sentry_sdk
+from openai import OpenAIError
 from sqlalchemy.orm import sessionmaker
 
-from mogo.agent.loop import run_agent
+from mogo.agent.loop import AgentFailed, run_agent
 from mogo.agent.prompts import SYSTEM, build_user_prompt
 from mogo.agent.schemas import GateResult
 from mogo.agent.tools import ToolBox
@@ -18,7 +19,7 @@ from mogo.config import RepoConfig, Settings
 from mogo.context import ContextError, RunContext, load_context
 from mogo.github.app import repo_token as app_repo_token
 from mogo.github.client import GitHubClient, GitHubError, parse_pr_url
-from mogo.llm.provider import LLMUnavailable, make_client, resolve_llm
+from mogo.llm.provider import LLMUnavailable, make_client, resolve_chain
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
 from mogo.profile.build import GitTree, Tree
@@ -126,13 +127,14 @@ def execute_run(
         if cfg.name.lower() != f"{owner}/{repo_name}".lower():
             raise RunFailed(f"PR belongs to {owner}/{repo_name}, but the feature lists it under {cfg.name}")
 
-        # The project owner's LLM, checked before anything slow.
+        # The project owner's LLMs, in the order they set; checked before anything slow.
         try:
-            choice = resolve_llm(ctx.owner, settings.mogo_secret_key)
+            chain, skipped = resolve_chain(ctx.owner, settings.mogo_secret_key)
         except LLMUnavailable as e:
             raise RunFailed(str(e)) from e
-        rec.update(llm_used=choice.label)
-        rec(f"using LLM {choice.label}")
+        for note in skipped:
+            rec(note, "warn")
+        rec("LLMs, in order: " + " > ".join(c.label for c in chain))
 
         # Reads the repo and posts the review as the Mogo App (mogo[bot]), scoped to this one repo for an hour.
         token = (token_for or app_repo_token)(settings, owner, repo_name, ctx.installation_id)
@@ -146,7 +148,7 @@ def execute_run(
         for problem in secret_problems:
             rec(f"repo secret unavailable: {problem}", "warn")
         repo_env = {**ctx.env, **stored}  # a sensitive value wins over a plain one with the same name
-        rec.redact = Redactor([*stored.values(), choice.api_key, token])
+        rec.redact = Redactor([*stored.values(), *[c.api_key for c in chain], token])
         if stored:
             rec(f"repo secrets: {', '.join(sorted(stored))}")
 
@@ -215,8 +217,25 @@ def execute_run(
             conventions=_read_conventions(root, cfg.conventions), rules=cfg.rules,
             gates=gates, app_status=app_status, notes=cfg.notes, project=ctx, builtin=builtin,
         )
-        client = (llm_factory or make_client)(choice)
-        report = run_agent(client, choice.model, SYSTEM, rec.redact(user), ToolBox(root, repo_env, rec.redact), settings.max_agent_steps)
+        # Each LLM gets the whole review; one that fails (unreachable, rejected, no report) hands over to the next.
+        # Only LLM failures fall back: a bug anywhere else in the run is not the model's fault.
+        report, choice, failures = None, None, list(skipped)
+        for i, candidate in enumerate(chain):
+            rec.update(llm_used=candidate.label)
+            rec(f"using LLM {candidate.label}")
+            try:
+                client = (llm_factory or make_client)(candidate)
+                report = run_agent(client, candidate.model, SYSTEM, rec.redact(user),
+                                   ToolBox(root, repo_env, rec.redact), settings.max_agent_steps)
+                choice = candidate
+                break
+            except (OpenAIError, AgentFailed) as e:
+                reason = " ".join(str(e).split())[:300]
+                failures.append(f"{candidate.label}: {reason}")
+                more = i < len(chain) - 1
+                rec(f"LLM {candidate.label} failed: {reason}" + ("; trying the next one" if more else ""), "warn")
+        if report is None or choice is None:
+            raise RunFailed("every LLM failed. " + " | ".join(failures))
         rec(f"agent done: {len(report.criteria)} criteria, {len(report.findings)} findings")
 
         inline, general = split_findings(report.findings, diff)

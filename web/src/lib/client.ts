@@ -4,10 +4,11 @@ import type { RunRow } from '@/lib/runs'
 import type { EnvVarInfo } from '@/lib/env'
 import type { InstalledRepo } from '@/lib/github-app'
 import type { SessionUser } from '@/lib/sessions'
-import type { LlmSettings } from '@/lib/users'
+import type { LlmConnection } from '@/lib/llm'
+import type { Provider } from '@/lib/llm-providers'
 
 export type { FeatureRow as Feature, ProjectRow as Project, ProjectSummary, RepoRow as Repo, RunRow as Run }
-export type { InstalledRepo, LlmSettings }
+export type { InstalledRepo, LlmConnection }
 
 export interface Criterion {
   text: string
@@ -66,9 +67,22 @@ export const api = {
   stats: () => call<Stats>('/stats'),
   session: () => call<Session>('/session'),
   logout: () => call<{ ok: true }>('/auth/logout', send('POST')),
-  llm: () => call<LlmSettings>('/settings/llm'),
-  setLlm: (body: { base_url: string; model: string; api_key?: string | null }) =>
-    call<LlmSettings>('/settings/llm', send('PUT', body)),
+  llmConnections: () => call<{ connections: LlmConnection[] }>('/settings/llm'),
+  addLlmConnection: (body: {
+    provider: Provider
+    base_url?: string
+    model: string
+    api_key?: string
+    active?: boolean
+  }) => call<LlmConnection>('/settings/llm', send('POST', body)),
+  updateLlmConnection: (
+    id: string,
+    body: { base_url?: string; model?: string; api_key?: string | null; active?: boolean },
+  ) => call<LlmConnection>(`/settings/llm/${id}`, send('PATCH', body)),
+  reorderLlmConnections: (ids: string[]) =>
+    call<{ connections: LlmConnection[] }>('/settings/llm/order', send('PUT', { ids })),
+  deleteLlmConnection: (id: string) => call<{ ok: true }>(`/settings/llm/${id}`, { method: 'DELETE' }),
+  testLlmConnection: (id: string) => call<{ ok: true }>(`/settings/llm/${id}/test`, send('POST')),
   installedRepos: () => call<InstalledRepo[]>('/github/repos'),
 
   projects: () => call<ProjectSummary[]>('/projects'),

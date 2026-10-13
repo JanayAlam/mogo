@@ -8,8 +8,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from mogo.config import RepoConfig
-from mogo.llm.provider import OwnerLLM
-from mogo.models import Feature, FeatureRepo, Project, Repo, RepoEnvVar, Run
+from mogo.llm.provider import Connection, OwnerLLM
+from mogo.models import Feature, FeatureRepo, LlmConnection, Project, Repo, RepoEnvVar, Run
 
 
 class ContextError(ValueError):
@@ -30,7 +30,7 @@ class RunContext:
     cfg: RepoConfig
     repo_id: str = ""
     installation_id: int | None = None  # the Mogo App installation on the repo
-    owner: OwnerLLM | None = None  # the project owner's LLM settings
+    owner: OwnerLLM | None = None  # the project owner and their LLM chain
     role: str = ""
     default_branch: str = "main"
     project_name: str = ""
@@ -69,12 +69,12 @@ def load_context(sf: sessionmaker, run_id: str) -> RunContext:
             repo = find_repo(s, run.repo)
             if repo is None:
                 raise ContextError(f"{run.repo} is not configured in any project")
-            ctx = _base(repo, s.get(Project, repo.project_id), feature=run.feature)
+            ctx = _base(s, repo, s.get(Project, repo.project_id), feature=run.feature)
             ctx.env, ctx.secrets = _env(s, repo.id)
             return ctx
 
         feature: Feature = fr.feature
-        ctx = _base(fr.repo, feature.project, feature=feature.description.strip() or run.feature)
+        ctx = _base(s, fr.repo, feature.project, feature=feature.description.strip() or run.feature)
         ctx.feature_title, ctx.requirements = feature.title, fr.requirements
         if not ctx.feature and ctx.requirements:
             ctx.feature = ctx.requirements
@@ -102,16 +102,22 @@ def legacy_env_from(config: dict | None) -> list[str]:
     return sorted(old if isinstance(old, (dict, list)) else [])
 
 
-def _owner(project: Project) -> OwnerLLM | None:
+def _owner(s: Session, project: Project) -> OwnerLLM | None:
+    """The project owner and the LLM connections they have switched on, in their order."""
     u = project.owner
     if u is None:
         return None
-    return OwnerLLM(user_id=u.id, login=u.login, base_url=u.llm_base_url, model=u.llm_model, api_key_enc=u.llm_api_key_enc)
+    rows = s.scalars(
+        select(LlmConnection).where(LlmConnection.user_id == u.id, LlmConnection.active.is_(True))
+        .order_by(LlmConnection.position, LlmConnection.created_at, LlmConnection.id)
+    ).all()
+    return OwnerLLM(user_id=u.id, login=u.login,
+                    connections=tuple(Connection(c.base_url, c.model, c.api_key_enc) for c in rows))
 
 
-def _base(repo: Repo, project: Project, feature: str) -> RunContext:
+def _base(s: Session, repo: Repo, project: Project, feature: str) -> RunContext:
     return RunContext(
-        cfg=repo_config(repo), repo_id=repo.id, installation_id=repo.installation_id, owner=_owner(project),
+        cfg=repo_config(repo), repo_id=repo.id, installation_id=repo.installation_id, owner=_owner(s, project),
         role=repo.role, default_branch=repo.default_branch or "main",
         project_name=project.name, project_description=project.description,
         project_settings=project.settings or {}, feature=feature, legacy_env_from=legacy_env_from(repo.config),

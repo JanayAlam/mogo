@@ -15,7 +15,6 @@ import { validWebhookSignature } from '@/lib/github-app'
 import { checkState, safeNext, STATE_COOKIE } from '@/lib/oauth-state'
 import * as sessions from '@/lib/sessions'
 import * as users from '@/lib/users'
-import { validateLlmInput } from '@/lib/validate'
 import { proxy } from '@/proxy'
 
 const ALICE = { id: 'u1', login: 'alice', name: 'Alice', avatar_url: '' }
@@ -143,25 +142,5 @@ describe('webhook', () => {
     vi.stubEnv('GITHUB_WEBHOOK_SECRET', 'hook')
     const req = new Request('http://x', { method: 'POST', body: '{}', headers: { 'x-hub-signature-256': sign('{}', 'x') } })
     expect((await webhook(req)).status).toBe(401)
-  })
-})
-
-describe('validateLlmInput', () => {
-  it('accepts an OpenAI-compatible endpoint and normalizes it', () => {
-    expect(validateLlmInput({ base_url: 'https://api.openai.com/v1/', model: 'gpt-4.1', api_key: 'sk' })).toEqual({
-      base_url: 'https://api.openai.com/v1', model: 'gpt-4.1', api_key: 'sk',
-    })
-    expect(validateLlmInput({ base_url: 'http://box.ts.net:11434/v1', model: 'qwen' })).toEqual({
-      base_url: 'http://box.ts.net:11434/v1', model: 'qwen',
-    })
-    expect(validateLlmInput({ base_url: 'https://a/v1', model: 'm', api_key: '' })).toMatchObject({ api_key: null })
-  })
-  it.each([
-    [{ base_url: 'ftp://a', model: 'm' }],
-    [{ base_url: 'not a url', model: 'm' }],
-    [{ base_url: 'https://user:sk@a/v1', model: 'm' }],
-    [{ base_url: 'https://a/v1' }],
-  ])('rejects %j', (body) => {
-    expect(typeof validateLlmInput(body)).toBe('string')
   })
 })

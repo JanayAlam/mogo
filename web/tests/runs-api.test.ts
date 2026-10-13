@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/auth', async (orig) => (await import('./signed-in')).signedIn(await orig()))
-vi.mock('@/lib/users', () => ({ getLlmSettings: vi.fn(), llmConfigured: (s: { model: string }) => !!s.model }))
+vi.mock('@/lib/llm', () => ({ activeLlmModel: vi.fn() }))
 vi.mock('@/lib/github-app', () => ({ installedRepos: vi.fn() }))
 vi.mock('@/lib/projects', () => ({ setRepoInstallation: vi.fn() }))
 vi.mock('@/lib/runs', async (orig) => ({
@@ -25,7 +25,7 @@ import * as features from '@/lib/features'
 import * as githubApp from '@/lib/github-app'
 import * as projects from '@/lib/projects'
 import * as runs from '@/lib/runs'
-import * as users from '@/lib/users'
+import * as llm from '@/lib/llm'
 
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) })
 const post = (body: unknown) => new Request('http://x', { method: 'POST', body: JSON.stringify(body) })
@@ -44,7 +44,7 @@ beforeEach(() => {
   vi.stubEnv('RUNNER_REPO', 'me/mogo')
   vi.mocked(runs.insertRun).mockImplementation(async (r) => ({ id: `run-${r.repo}`, status: 'queued', ...r }) as never)
   vi.mocked(features.getFeature).mockResolvedValue(FEATURE as never)
-  vi.mocked(users.getLlmSettings).mockResolvedValue({ base_url: 'https://api.openai.com/v1', model: 'm', has_key: true })
+  vi.mocked(llm.activeLlmModel).mockResolvedValue('m')
   vi.mocked(githubApp.installedRepos).mockResolvedValue([
     { full_name: 'acme/api', installation_id: 5, account: 'acme', default_branch: 'main', private: true },
     { full_name: 'acme/web', installation_id: 5, account: 'acme', default_branch: 'main', private: true },
@@ -92,7 +92,7 @@ describe('POST /api/features/:id/runs', () => {
   })
 
   it('needs the user\'s LLM', async () => {
-    vi.mocked(users.getLlmSettings).mockResolvedValue({ base_url: '', model: '', has_key: false })
+    vi.mocked(llm.activeLlmModel).mockResolvedValue(null)
     const res = await startRuns(post({}), ctx('f1'))
     expect(res.status).toBe(422)
     expect((await res.json()).detail).toContain('LLM')

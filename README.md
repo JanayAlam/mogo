@@ -317,13 +317,26 @@ CLI alternative: `cd web && pnpm dlx vercel --prod` (set the same variables with
 
 ## The LLM
 
-Each user sets their own under **Settings**: an OpenAI-compatible base URL, a model, and an API key (stored encrypted,
-never shown again; optional for local servers). Every run of a project uses its owner's LLM, so usage is billed to
-them. Presets fill in the base URL for OpenAI, Anthropic, DeepSeek and OpenRouter. The model must support tool calling.
+Each user adds their own LLM connections under **Settings > LLM connections**: OpenAI, Claude, DeepSeek, OpenRouter,
+or **Local / Custom** (any OpenAI-compatible server). A connection has a model and an API key (stored encrypted,
+never shown again; optional for local servers) and an on/off switch. The switched-on connections form a fallback
+chain in the order of the cards (drag a card by its handle to reorder; the first is "primary"). A run of a project
+uses its owner's chain: it reviews with the first connection, and when that one fails (unreachable, key or model
+rejected, rate limited, or the model never submits a report) it starts the review again with the next. When every
+connection fails the run fails and lists each reason. Usage is billed to the owner. The model must support tool calling.
+
+Adding or editing a connection is checked with the provider first (`GET <base url>/models`): the key format, that the
+key is accepted, that the model exists, and for custom servers that the address is public https. The **Test** button
+on a card repeats the check. Hosted providers have a fixed base URL, so a key can only be sent to its own provider.
 
 A local server (Ollama, LM Studio, vLLM, llama.cpp) works too, but runs execute on GitHub Actions, which cannot reach
-your localhost: expose it with a tunnel (Tailscale, or `cloudflared tunnel --url http://localhost:11434`) and use that
-URL, ending in `/v1`, as the base URL.
+your localhost: expose it with a tunnel and use that https address, ending in `/v1`, as the base URL. The Local /
+Custom card shows the steps:
+
+```
+ollama serve
+cloudflared tunnel --url http://localhost:11434          # or: ngrok http 11434 --host-header=localhost:11434
+```
 
 ## Troubleshooting
 
@@ -335,7 +348,8 @@ URL, ending in `/v1`, as the base URL.
 | `failed: ... is not configured in any project`  | add the repo to a project in the web app                                                           |
 | `failed: PR belongs to x/y, but ...`            | the feature's PR link points at another repo; fix it on the feature's edit page                    |
 | `failed: PR comes from a fork`                  | enable "Allow PRs from forks" in the repo settings (only if you trust the fork)                    |
-| `failed: ... has not set up an LLM yet`         | the project owner has no LLM under Settings                                                        |
+| `failed: ... has no LLM switched on`            | the project owner has no switched-on connection under Settings > LLM connections                   |
+| `failed: every LLM failed. ...`                 | each connection in the chain failed; the message gives the reason for each                         |
 | LLM errors (401, 404 model)                     | wrong API key, base URL or model id under Settings                                                 |
 | `Mogo is not installed on x/y`                  | install the App on that repo (repo page, or Settings, Choose repos for Mogo)                       |
 | `GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY must be set` | the `MOGO_APP_ID` / `MOGO_APP_PRIVATE_KEY` Actions secrets are missing                     |

@@ -13,7 +13,11 @@ import {
 import { getRun, getStats, insertRun, listRuns, markRunFailed } from '@/lib/runs'
 import { decryptSecret, deleteEnvVar, importEnv, listEnv, secretKey, setEnvVar } from '@/lib/env'
 import { createSession, destroySession, userForToken } from '@/lib/sessions'
-import { getLlmSettings, loadGitHubTokens, saveGitHubTokens, setLlmSettings, upsertUser } from '@/lib/users'
+import {
+  activeLlmModel, createLlmConnection, deleteLlmConnection, listLlmConnections, OrderError, reorderLlmConnections,
+  updateLlmConnection,
+} from '@/lib/llm'
+import { loadGitHubTokens, saveGitHubTokens, upsertUser } from '@/lib/users'
 
 const KEY = 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc='
 const gh = (id: number, login: string) => ({ id, login, name: null, avatar_url: '', email: null })
@@ -32,7 +36,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('queries (postgres)', () => {
     await db().$disconnect()
   })
 
-  it('users: one row per GitHub id, sessions, encrypted tokens and LLM key', async () => {
+  it('users: one row per GitHub id, sessions, encrypted tokens', async () => {
     expect(await upsertUser(gh(9_000_001, 'alice-renamed'))).toBe(alice)
     const token = await createSession(alice)
     expect(await userForToken(token)).toMatchObject({ id: alice, login: 'alice-renamed' })
@@ -45,16 +49,41 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('queries (postgres)', () => {
     expect(await loadGitHubTokens(alice)).toEqual({ access: 'ghu_a', refresh: 'ghr_a' })
     await saveGitHubTokens(alice, { access_token: 'ghu_b', expires_in: 30 }) // about to expire: refresh instead
     expect(await loadGitHubTokens(alice)).toEqual({ access: null, refresh: null })
+  })
 
-    await setLlmSettings(alice, { base_url: 'https://api.openai.com/v1', model: 'm', api_key: 'sk-1' })
-    expect(await getLlmSettings(alice)).toEqual({ base_url: 'https://api.openai.com/v1', model: 'm', has_key: true })
-    const u = (await db().user.findUnique({ where: { id: alice } }))!
+  it('llm connections: an ordered fallback chain, encrypted keys, isolated between users', async () => {
+    const make = (model: string, api_key: string | null, active = true) => createLlmConnection(alice, {
+      provider: 'openai', name: 'OpenAI', base_url: 'https://api.openai.com/v1', model, api_key, active,
+    })
+    const first = await make('m1', 'sk-1')
+    const second = await make('m2', null)
+    const third = await make('m3', null, false)
+    const order = async () => (await listLlmConnections(alice)).map((c) => [c.model, c.active])
+    expect(await order()).toEqual([['m1', true], ['m2', true], ['m3', false]]) // new ones join the end; several are on
+    expect(await activeLlmModel(alice)).toBe('m1')
+
     // the runner decrypts with additional data "user:<id>:llm_api_key" (backend/mogo/llm/provider.py)
-    expect(decryptSecret(secretKey(), `user:${alice}`, 'llm_api_key', u.llm_api_key_enc!)).toBe('sk-1')
-    await setLlmSettings(alice, { base_url: 'https://api.openai.com/v1', model: 'm2' }) // key kept
-    expect(await getLlmSettings(alice)).toMatchObject({ model: 'm2', has_key: true })
-    await setLlmSettings(alice, { base_url: 'https://api.openai.com/v1', model: 'm2', api_key: null })
-    expect((await getLlmSettings(alice)).has_key).toBe(false)
+    const row = (await db().llmConnection.findUnique({ where: { id: first.id } }))!
+    expect(row.api_key_enc).not.toContain('sk-1')
+    expect(decryptSecret(secretKey(), `user:${alice}`, 'llm_api_key', row.api_key_enc!)).toBe('sk-1')
+
+    // reorder: the chain changes, the on/off state does not
+    const moved = await reorderLlmConnections(alice, [third.id, second.id, first.id])
+    expect(moved.map((c) => [c.model, c.active])).toEqual([['m3', false], ['m2', true], ['m1', true]])
+    expect(await activeLlmModel(alice)).toBe('m2') // first one that is switched on
+    await expect(reorderLlmConnections(alice, [first.id, second.id])).rejects.toBeInstanceOf(OrderError) // stale list
+    await expect(reorderLlmConnections(alice, [first.id, second.id, 'x'])).rejects.toBeInstanceOf(OrderError)
+    await expect(reorderLlmConnections(bob, [first.id, second.id, third.id])).rejects.toBeInstanceOf(OrderError)
+
+    expect(await updateLlmConnection(alice, third.id, { active: true })).toMatchObject({ active: true }) // others stay on
+    expect((await listLlmConnections(alice)).filter((c) => c.active)).toHaveLength(3)
+    expect(await updateLlmConnection(alice, first.id, { model: 'm1b' })).toMatchObject({ model: 'm1b', has_key: true }) // key kept
+    expect(await updateLlmConnection(alice, first.id, { api_key: null })).toMatchObject({ has_key: false })
+
+    expect(await updateLlmConnection(bob, first.id, { active: false })).toBeNull() // not bob's
+    expect(await deleteLlmConnection(bob, first.id)).toBe(false)
+    for (const c of [first, second, third]) expect(await deleteLlmConnection(alice, c.id)).toBe(true)
+    expect(await activeLlmModel(alice)).toBeNull()
   })
 
   it('projects, repos and features with their latest runs, seen by their owner only', async () => {

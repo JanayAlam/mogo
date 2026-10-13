@@ -1,4 +1,6 @@
 import type { FeatureInput } from '@/lib/features'
+import { isProvider, PROVIDER_INFO, PROVIDERS, type Provider } from '@/lib/llm-providers'
+import { isInternalHost } from '@/lib/net-guard'
 import type { RepoConfig, RepoInput } from '@/lib/projects'
 
 /** Each validator returns the clean value or an error message for a 422. */
@@ -166,30 +168,103 @@ export function validateStartInput(body: unknown): Result<StartInput> {
   return { repo_ids: repoIds, dry_run: b.dry_run === true }
 }
 
-// --- the user's LLM
+// --- the user's LLM connections
 
-export interface LlmInput {
+export interface LlmCreateInput {
+  provider: Provider
+  name: string
   base_url: string
   model: string
-  api_key?: string | null // undefined keeps the stored key, null or "" removes it
+  api_key: string | null
+  active: boolean // in the fallback chain; new connections are on unless the body says otherwise
+}
+export interface LlmPatchInput {
+  base_url?: string // custom connections only
+  model?: string
+  api_key?: string | null // a string sets the key, null removes it, absent keeps it
+  active?: boolean
 }
 
-export function validateLlmInput(body: unknown): Result<LlmInput> {
+/** The base URL of a custom connection: https, no credentials in it, and not an address inside our own network. */
+function customBaseUrl(raw: string): string {
+  let url: URL
+  try {
+    url = new URL(raw.trim().replace(/\/+$/, ''))
+  } catch {
+    throw new Invalid('base_url must be a URL, e.g. https://my-tunnel.trycloudflare.com/v1')
+  }
+  if (url.protocol !== 'https:') {
+    throw new Invalid('base_url must be https (a tunnel from Cloudflare or ngrok gives you one)')
+  }
+  if (url.username || url.password) throw new Invalid('put the API key in api_key, not in the URL')
+  if (url.search || url.hash) throw new Invalid('base_url must not have a query or fragment')
+  if (isInternalHost(url.hostname)) {
+    throw new Invalid('base_url must be a public address: runs execute on GitHub Actions and cannot reach localhost, see the tunnel steps')
+  }
+  return url.toString().replace(/\/+$/, '')
+}
+
+function llmKey(provider: Provider, key: string | undefined): string | null {
+  if (!key) return null
+  if (/\s/.test(key)) throw new Invalid('api_key must not contain spaces or line breaks')
+  const prefix = PROVIDER_INFO[provider].key_prefix
+  if (prefix && !key.startsWith(prefix)) {
+    throw new Invalid(`a ${PROVIDER_INFO[provider].label} API key starts with ${prefix}`)
+  }
+  return key
+}
+
+export function validateLlmCreate(body: unknown): Result<LlmCreateInput> {
   if (!isObj(body)) return 'invalid JSON body'
   return check(() => {
-    const baseUrl = (str(body, 'base_url', 500, true) as string).replace(/\/+$/, '')
-    let url: URL
-    try {
-      url = new URL(baseUrl)
-    } catch {
-      throw new Invalid('base_url must be a URL, e.g. https://api.openai.com/v1')
-    }
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Invalid('base_url must be http(s)')
-    if (url.username || url.password) throw new Invalid('put the API key in api_key, not in the URL')
+    if (!isProvider(body.provider)) throw new Invalid(`provider must be one of: ${PROVIDERS.join(', ')}`)
+    const provider = body.provider
+    const info = PROVIDER_INFO[provider]
     const model = str(body, 'model', 200, true) as string
-    const out: LlmInput = { base_url: baseUrl, model }
-    if (body.api_key === null) out.api_key = null
-    else if (body.api_key !== undefined) out.api_key = str(body, 'api_key', 1000) || null
+    const key = llmKey(provider, str(body, 'api_key', 1000))
+    if (!key && provider !== 'custom') throw new Invalid(`api_key is required for ${info.label}`)
+    let baseUrl = info.base_url
+    if (provider === 'custom') baseUrl = customBaseUrl(str(body, 'base_url', 500, true) as string)
+    if (body.active !== undefined && typeof body.active !== 'boolean') throw new Invalid('active must be true or false')
+    return { provider, name: info.label, base_url: baseUrl, model, api_key: key, active: body.active !== false }
+  })
+}
+
+/** The new order: every connection id once. Whether it is the user's complete set is checked against the database. */
+export function validateLlmOrder(body: unknown): Result<string[]> {
+  const ids = isObj(body) ? body.ids : undefined
+  if (!Array.isArray(ids) || ids.length > 100 || !ids.every((x) => typeof x === 'string' && x.length > 0 && x.length <= 36)) {
+    return 'ids must be the list of connection ids in the new order'
+  }
+  if (new Set(ids).size !== ids.length) return 'ids must not repeat'
+  return ids
+}
+
+export function validateLlmPatch(body: unknown, provider: Provider): Result<LlmPatchInput> {
+  if (!isObj(body)) return 'invalid JSON body'
+  return check(() => {
+    const out: LlmPatchInput = {}
+    const model = str(body, 'model', 200)
+    if (model !== undefined) {
+      if (!model) throw new Invalid('model is required')
+      out.model = model
+    }
+    if (body.base_url !== undefined) {
+      if (provider !== 'custom') throw new Invalid(`the base URL of ${PROVIDER_INFO[provider].label} cannot be changed`)
+      out.base_url = customBaseUrl(str(body, 'base_url', 500, true) as string)
+    }
+    if (body.api_key === null) {
+      if (provider !== 'custom') throw new Invalid(`api_key is required for ${PROVIDER_INFO[provider].label}`)
+      out.api_key = null
+    } else if (body.api_key !== undefined) {
+      const key = llmKey(provider, str(body, 'api_key', 1000))
+      if (!key) throw new Invalid('api_key cannot be empty (send null to remove it)')
+      out.api_key = key
+    }
+    if (body.active !== undefined) {
+      if (typeof body.active !== 'boolean') throw new Invalid('active must be true or false')
+      out.active = body.active
+    }
     return out
   })
 }

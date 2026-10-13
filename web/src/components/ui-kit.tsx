@@ -2,13 +2,7 @@
 
 import { ArrowLeft, ChevronDown, LogOut, Settings, UserRound } from "lucide-react";
 import Link from "next/link";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   AlertDialog,
@@ -22,18 +16,8 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
-import {
-  Button,
-  buttonVariants,
-  type ButtonProps,
-} from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Button, buttonVariants, type ButtonProps } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,7 +38,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <Link
             href="/"
-            className="flex items-center gap-2 font-mono text-sm font-semibold rounded bg-primary px-1.5 py-0.5 text-primary-foreground">
+            className="flex items-center gap-2 font-mono text-sm font-semibold rounded bg-primary px-1.5 py-0.5 text-primary-foreground"
+          >
             mogo
           </Link>
           <UserMenu />
@@ -71,9 +56,7 @@ const sessionListeners = new Set<(s: Session) => void>();
 
 export function refreshSession() {
   sessionPromise = api.session();
-  sessionPromise
-    .then((s) => sessionListeners.forEach((l) => l(s)))
-    .catch(() => {});
+  sessionPromise.then((s) => sessionListeners.forEach((l) => l(s))).catch(() => {});
 }
 
 /** The signed-in user and whether their LLM is set up; null while loading. */
@@ -128,7 +111,8 @@ function UserMenu() {
             // full reload on purpose: drops any client state of the signed-in session
             // eslint-disable-next-line @next/next/no-location-assign-relative-destination
             window.location.href = "/login";
-          }}>
+          }}
+        >
           <LogOut /> Log out
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -137,19 +121,9 @@ function UserMenu() {
 }
 
 /** Back to the parent page, shown above a page title. */
-export function BackLink({
-  href,
-  children,
-}: {
-  href: string;
-  children: string;
-}) {
+export function BackLink({ href, children }: { href: string; children: string }) {
   return (
-    <Button
-      asChild
-      variant="ghost"
-      size="sm"
-      className="text-muted-foreground hover:bg-transparent px-0">
+    <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:bg-transparent px-0">
       <Link href={href}>
         <ArrowLeft /> {children}
       </Link>
@@ -175,11 +149,7 @@ export function Modal({
 }) {
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent
-        className={cn(
-          "max-h-[90vh] overflow-y-auto",
-          wide ? "max-w-2xl" : "max-w-lg",
-        )}>
+      <DialogContent className={cn("max-h-[90vh] overflow-y-auto", wide ? "max-w-2xl" : "max-w-lg")}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
@@ -216,9 +186,7 @@ export function ConfirmButton({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            className={buttonVariants({ variant: "destructive" })}
-            onClick={onConfirm}>
+          <AlertDialogAction className={buttonVariants({ variant: "destructive" })} onClick={onConfirm}>
             {confirmLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -251,39 +219,16 @@ export function Field({
 }
 
 /** Small mono uppercase heading (section names, eyebrow text). */
-export function Eyebrow({
-  className,
-  children,
-}: {
-  className?: string;
-  children: ReactNode;
-}) {
+export function Eyebrow({ className, children }: { className?: string; children: ReactNode }) {
   return (
-    <p
-      className={cn(
-        "font-mono text-xs uppercase tracking-wider text-muted-foreground",
-        className,
-      )}>
-      {children}
-    </p>
+    <p className={cn("font-mono text-xs uppercase tracking-wider text-muted-foreground", className)}>{children}</p>
   );
 }
 
 /** Mono tag for repo roles and names. */
-export function Chip({
-  className,
-  children,
-  title,
-}: {
-  className?: string;
-  children: ReactNode;
-  title?: string;
-}) {
+export function Chip({ className, children, title }: { className?: string; children: ReactNode; title?: string }) {
   return (
-    <Badge
-      variant="secondary"
-      title={title}
-      className={cn("whitespace-nowrap font-mono font-normal", className)}>
+    <Badge variant="secondary" title={title} className={cn("whitespace-nowrap font-mono font-normal", className)}>
       {children}
     </Badge>
   );
@@ -305,17 +250,9 @@ const stateLabel: Record<ReviewState, string> = {
   done: "done",
 };
 
-export function StatusBadge({
-  state,
-  label,
-}: {
-  state: ReviewState;
-  label?: string;
-}) {
+export function StatusBadge({ state, label }: { state: ReviewState; label?: string }) {
   return (
-    <Badge
-      variant="outline"
-      className={cn("gap-1.5 font-mono font-normal", stateStyle[state])}>
+    <Badge variant="outline" className={cn("gap-1.5 font-mono font-normal", stateStyle[state])}>
       <span
         className={cn(
           "h-1.5 w-1.5 rounded-full bg-current",
@@ -332,28 +269,20 @@ export function ErrorText({ error }: { error: string }) {
 }
 
 export function timeAgo(t: string | number) {
-  const s = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(t).getTime()) / 1000),
-  );
+  const s = Math.max(0, Math.floor((Date.now() - new Date(t).getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export const errorMessage = (e: unknown) =>
-  e instanceof Error ? e.message : String(e);
+export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * Loads `fn` on mount and whenever `key` changes. While `poll(data)` is true it reloads every 3 s,
  * so pages refresh themselves while a run is in flight.
  */
-export function useApi<T>(
-  fn: () => Promise<T>,
-  key: string,
-  poll?: (data: T) => boolean,
-) {
+export function useApi<T>(fn: () => Promise<T>, key: string, poll?: (data: T) => boolean) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
