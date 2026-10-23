@@ -1,6 +1,7 @@
 [project]
 name = "mogo-server"
 version = "1.0.0"
+description = "Runner for Mogo, a self-hosted agent that tests a feature across a project's GitHub PRs and posts a code review on each."
 requires-python = ">=3.11"
 dependencies = [
   "sqlalchemy>=2.0",

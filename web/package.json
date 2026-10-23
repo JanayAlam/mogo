@@ -1,6 +1,7 @@
 {
   "name": "@mogo/web",
   "version": "1.0.0",
+  "description": "Web app for Mogo, a self-hosted agent that tests a feature across a project's GitHub PRs and posts a code review on each.",
   "private": true,
   "scripts": {
     "dev": "next dev",
