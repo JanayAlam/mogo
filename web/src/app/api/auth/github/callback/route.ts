@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import { COOKIE, COOKIE_MAX_AGE, cookieOptions, readCookie } from '@/lib/auth'
+import { describeDbError } from '@/lib/db-errors'
 import { exchangeCode, fetchProfile } from '@/lib/github-app'
 import { logger } from '@/lib/log'
 import { checkState, STATE_COOKIE } from '@/lib/oauth-state'
@@ -33,6 +34,11 @@ export async function GET(req: Request) {
     await saveGitHubTokens(userId, tokens)
     logger.info('signed in', { user_id: userId, login: profile.login })
   } catch (e) {
+    const db = describeDbError(e)
+    if (db) {
+      logger.error('sign-in failed', { error: db.log })
+      return toLogin(db.detail)
+    }
     logger.error('sign-in failed', { error: e instanceof Error ? e.message : String(e) })
     return toLogin(e instanceof Error ? e.message : 'GitHub sign-in failed')
   }
