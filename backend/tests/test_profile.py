@@ -160,14 +160,14 @@ def test_profile_is_cached_per_commit(sf, tmp_path):
     assert not reused and load_profile(sf, rid, "main").main_sha == "sha2"
 
 
-# --- the detected stack is only a suggestion: the runner never sets the repo's type
+# --- the detected Docker files are only a suggestion: the runner never sets the repo's settings
 
-def _profile(stack="nextjs"):
+def _profile():
     from mogo.profile.build import Profile
-    return Profile(main_sha="abc", branch="main", structure={}, suggestions={"stack": stack})
+    return Profile(main_sha="abc", branch="main", structure={}, suggestions={"dockerfile": True})
 
 
-@pytest.mark.parametrize("config", [{}, {"stack": ""}, {"stack": "docker"}, {"stack": "python", "gates": ["x"]}])
+@pytest.mark.parametrize("config", [{}, {"stack": ""}, {"docker_mode": "compose"}, {"docker_mode": "dockerfile", "start": "x"}])
 def test_learning_a_repo_never_changes_its_settings(sf, config):
     from conftest import seed_repos
     from mogo.config import RepoConfig
@@ -180,5 +180,5 @@ def test_learning_a_repo_never_changes_its_settings(sf, config):
         s.commit()
     save_profile(sf, rid, _profile())
     with sf() as s:
-        assert s.get(Repo, rid).config == config  # not even a `stack` key added
-    assert load_profile(sf, rid, "main").suggestions["stack"] == "nextjs"  # but it is offered
+        assert s.get(Repo, rid).config == config  # nothing added
+    assert load_profile(sf, rid, "main").suggestions["dockerfile"] is True  # but it is offered

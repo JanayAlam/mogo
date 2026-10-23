@@ -4,10 +4,6 @@ import type { RunStatus } from '@/lib/runs'
 
 /** Run settings of a repo. Mirrors RepoConfig in backend/mogo/config.py (minus `name`). Never secret values. */
 export interface RepoConfig {
-  setup: string[]
-  gates: string[]
-  test_cmd: string
-  services_cmd: string
   services_down: string
   prepare: string[]
   start: string
@@ -16,25 +12,10 @@ export interface RepoConfig {
   rules: string[]
   notes: string
   allow_forks: boolean
-  stack: string // what kind of app it is, an id of lib/stack.ts; '' = not set
-  // Not in the runner's RepoConfig: what the form for this type was filled with. The runner reads the commands
-  // they are compiled into (gates, test_cmd, prepare, start, healthcheck, services_down); these keep each field apart.
-  scripts: NodeScripts // Node.js, TypeScript and JavaScript types
-  docker_mode: string // 'dockerfile' (default) or 'compose'; Docker type
+  // The runner only executes commands: prepare, start, healthcheck and services_down are compiled from these.
+  docker_mode: string // 'compose' (default) or 'dockerfile'
   docker_file: string // its name at the repo root; '' = the default
   docker_port: number // a Dockerfile app's port; 0 = the usual one
-}
-
-/** The commands of a Node.js, TypeScript or JavaScript repo, one field each (package.json scripts or free text). */
-export interface NodeScripts {
-  lint: string
-  typecheck: string
-  format: string
-  other: string[] // more checks
-  test: string
-  build: string
-  before: string[] // steps before the app starts: start a database, migrate
-  run: string
 }
 
 export interface RepoRow {
@@ -61,20 +42,11 @@ export interface ProfileInfo {
   suggestions?: Suggestions | null // only from getRepo
 }
 
-/** Run settings the runner read from the source branch (backend/mogo/profile/detect.py). */
+/** What the runner (or the web app) read from the source branch's root (backend/mogo/profile/detect.py). */
 export interface Suggestions {
-  package_manager?: string
-  install: string
-  checks: string[]
-  test_cmd: string
-  start: string
-  app_url: string
   env_names: string[]
-  scripts?: { name: string; run: string; body: string }[] // package.json scripts, `run` is the command that runs one
-  fields?: { lint: string; typecheck: string; format: string; test: string; build: string; run: string } // per form field
   dockerfiles?: string[] // Dockerfile-like names at the repo root
   compose_files?: string[]
-  stack?: string | { language: string; frameworks: string[] } // an id; older profiles hold the first version's object
   dockerfile?: boolean // a Dockerfile at the repo root
   docker_port?: number // its first EXPOSE, 0 when none
 }

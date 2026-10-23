@@ -34,9 +34,9 @@ describe('api.detectRepo', () => {
     await expect(api.detectRepo('r1')).rejects.toThrow('GitHub access expired; sign in again')
     expect(location.href).toBe('/projects/p1/repos/r1')
   })
-  it('returns the detected type', async () => {
-    reply(200, { ok: true, stack: 'express' })
-    expect(await api.detectRepo('r1')).toEqual({ ok: true, stack: 'express' })
+  it('returns what was detected', async () => {
+    reply(200, { ok: true, dockerfile: true })
+    expect(await api.detectRepo('r1')).toEqual({ ok: true, dockerfile: true })
   })
   it('passes other errors on with their message', async () => {
     reply(404, { detail: 'acme/api (branch nope) was not found, or the Mogo App cannot read it' })

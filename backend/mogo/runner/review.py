@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mogo.agent.schemas import AgentReport, Finding, GateResult
+from mogo.agent.schemas import AgentReport, Finding
 from mogo.github.diffmap import commentable_lines
 
 _ICON = {"pass": "✅", "fail": "❌", "unverified": "⚠️"}
@@ -22,15 +22,13 @@ def split_findings(findings: list[Finding], diff: str) -> tuple[list[dict], list
     return inline, general
 
 
-def verdict(report: AgentReport, gates: list[GateResult]) -> str:
+def verdict(report: AgentReport) -> str:
     if any(c.status == "fail" for c in report.criteria) or any(f.severity == "blocker" for f in report.findings):
-        return "changes_requested"
-    if any(not g.ok for g in gates):
         return "changes_requested"
     return "ok"
 
 
-def render_summary(report: AgentReport, gates: list[GateResult], general: list[Finding], llm: str) -> str:
+def render_summary(report: AgentReport, general: list[Finding], llm: str) -> str:
     parts = ["## mogo review", "", report.summary.strip(), ""]
     if report.criteria:
         parts += ["### Feature check", "| | Criterion | Evidence |", "|---|---|---|"]
@@ -42,8 +40,6 @@ def render_summary(report: AgentReport, gates: list[GateResult], general: list[F
         parts += ["### Built-in checks"]
         parts += [f"- {_CHECK_ICON[c.status]} `{c.id}`" + (f": {c.note}" if c.note else "") for c in report.checks]
         parts.append("")
-    if gates:
-        parts += ["### Gates"] + [f"- {'✅' if g.ok else '❌'} `{g.cmd}`" for g in gates] + [""]
     if general:
         parts += ["### Other findings"]
         parts += [f"- **{_SEV[f.severity]}** `{f.path}:{f.line}`: {f.message}" for f in general]

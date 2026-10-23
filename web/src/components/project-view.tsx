@@ -35,7 +35,6 @@ import { api, type InstalledRepo, type Project } from "@/lib/client";
 import { useConnectGitHub } from "@/lib/github-connect";
 import { useGitHub } from "@/lib/github-store";
 import { ROLE_SUGGESTIONS } from "@/lib/repo-form";
-import { stackLabel } from "@/lib/stack";
 import { type ReviewState, runState } from "@/lib/status";
 
 type Tab = "all" | "queue" | "failed" | "done";
@@ -154,7 +153,6 @@ export function ProjectView() {
                         </span>
                       )}
                     </div>
-                    <RepoStack stack={r.config.stack} />
                   </Link>
                 </li>
               ))}
@@ -417,16 +415,6 @@ function AddRepoForm({
         </div>
       </form>
     </Modal>
-  );
-}
-
-/** What kind of app a repo is, as a tag; nothing when not set. */
-function RepoStack({ stack }: { stack?: string }) {
-  if (!stack) return null;
-  return (
-    <div className="mt-1.5">
-      <Chip className="border border-primary/30 bg-primary/10 text-primary">{stackLabel(stack)}</Chip>
-    </div>
   );
 }
 

@@ -36,9 +36,3 @@ class AgentReport(BaseModel):
     criteria: list[Criterion] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     checks: list[CheckResult] = Field(default_factory=list)
-
-
-class GateResult(BaseModel):
-    cmd: str
-    ok: bool
-    output: str = ""

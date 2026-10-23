@@ -8,7 +8,7 @@ import { getRepo } from '@/lib/projects'
 import { detectRepo } from '@/lib/repo-detect'
 
 /**
- * Read the repo's package.json, pyproject.toml, Dockerfile and the like from GitHub right now and refresh what the repo
+ * Read the repo's Dockerfile, Compose files and .env.example from GitHub right now and refresh what the repo
  * page suggests from them. No runner involved: this is quick and needs no Actions token.
  */
 export const POST = authed(async (user, _req, { params }: IdParams) => {
@@ -17,7 +17,7 @@ export const POST = authed(async (user, _req, { params }: IdParams) => {
   if (!repo) return notFound('repo')
   try {
     const s = await detectRepo(user.id, repo)
-    return NextResponse.json({ ok: true, stack: s.stack })
+    return NextResponse.json({ ok: true, dockerfile: s.dockerfile })
   } catch (e) {
     if (e instanceof RepoReadError) return fail(404, e.message)
     return githubFailure(e)

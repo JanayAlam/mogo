@@ -26,7 +26,7 @@ export interface RunResult {
   summary?: string
   criteria?: Criterion[]
   findings?: Finding[]
-  gates?: { cmd: string; ok: boolean; output: string }[]
+  gates?: { cmd: string; ok: boolean; output: string }[] // runs saved before Docker-only; no longer produced
   checks?: { id: string; status: 'pass' | 'fail' | 'skipped'; note: string }[]
   summary_md?: string
 }
@@ -115,7 +115,7 @@ export const api = {
   deleteRepo: (id: string) => call<{ ok: true }>(`/repos/${id}`, { method: 'DELETE' }),
   /** Reads the repo's root files from GitHub for suggestions, no runner. A 401 (GitHub access expired) is thrown, not a redirect. */
   detectRepo: (id: string) =>
-    call<{ ok: true; stack: string }>(`/repos/${id}/detect`, send('POST'), 'return').catch((e) => {
+    call<{ ok: true; dockerfile: boolean }>(`/repos/${id}/detect`, send('POST'), 'return').catch((e) => {
       throw e instanceof UnauthorizedError ? new Error('GitHub access expired; sign in again') : e
     }),
   relearn: (id: string) => call<{ ok: true }>(`/repos/${id}/profile`, send('POST')),

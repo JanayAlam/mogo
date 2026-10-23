@@ -21,18 +21,20 @@ describe('validateRepoInput', () => {
     expect(validateRepoInput({ full_name: 'https://github.com/acme/api.git', role: 'backend' })).toEqual({
       full_name: 'acme/api', role: 'backend', default_branch: 'main', config: defaultRepoConfig(),
     })
-    expect(defaultRepoConfig().stack).toBe('docker')
+    expect(defaultRepoConfig().docker_mode).toBe('compose')
   })
   it.each([
     [{ full_name: 'not a repo' }, 'owner/repo'],
-    [{ full_name: 'a/b', config: { gates: 'pnpm lint' } }, 'config.gates'],
+    [{ full_name: 'a/b', config: { rules: 'no console.log' } }, 'config.rules'],
   ])('rejects %j', (body, msg) => {
     expect(validateRepoInput(body)).toContain(msg)
   })
-  it('drops keys that moved out of the settings (env, env_from)', () => {
-    expect(validateRepoInput({ full_name: 'a/b', config: { gates: ['x'], env: { A: '1' }, env_from: { X: 'Y' } } })).toEqual({
-      full_name: 'a/b', role: '', default_branch: 'main', config: { gates: ['x'] },
+  it('drops keys that moved out of the settings (env, env_from) or are gone (gates, stack, scripts, ...)', () => {
+    expect(validateRepoInput({ full_name: 'a/b', config: { rules: ['x'], env: { A: '1' }, env_from: { X: 'Y' } } })).toEqual({
+      full_name: 'a/b', role: '', default_branch: 'main', config: { rules: ['x'] },
     })
+    const old = { gates: ['x'], setup: ['y'], test_cmd: 'z', services_cmd: 'w', stack: 'express', scripts: 5 }
+    expect((validateRepoInput({ full_name: 'a/b', config: old }) as { config: object }).config).toEqual({})
     expect(JSON.stringify(validateRepoInput({ full_name: 'a/b', config: { env_from: ['X'] } }))).not.toContain('env_from')
   })
 })

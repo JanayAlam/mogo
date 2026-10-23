@@ -77,12 +77,8 @@ def _drop_prisma_options(url: str) -> str:
 
 class RepoConfig(BaseModel):
     name: str
-    setup: list[str] = Field(default_factory=list)
-    gates: list[str] = Field(default_factory=list)
-    test_cmd: str = ""
-    services_cmd: str = ""
-    services_down: str = ""  # stops what services_cmd started; always run at the end of a run
-    prepare: list[str] = Field(default_factory=list)  # after services_cmd, before start: migrate, seed
+    services_down: str = ""  # stops what the start command started; always run at the end of a run
+    prepare: list[str] = Field(default_factory=list)  # before start: build and bring up the containers
     start: str = ""
     healthcheck: str = ""
     conventions: list[str] = Field(default_factory=list)
@@ -92,7 +88,6 @@ class RepoConfig(BaseModel):
     docker_mode: str = ""  # "dockerfile" (default) or "compose": what a Docker repo runs
     docker_file: str = ""  # its file name at the repo root; empty: the default name(s)
     docker_port: int = 0  # the port a Dockerfile app is published on
-    stack: str = ""  # what the repo is (express, fastapi, docker, ...): ids of web/src/lib/stack.ts; "" = not set
 
 
 def load_repos(path: str | Path) -> dict[str, RepoConfig]:

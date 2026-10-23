@@ -13,11 +13,10 @@ from sqlalchemy.orm import sessionmaker
 
 from mogo.agent.loop import AgentFailed, run_agent
 from mogo.agent.prompts import SYSTEM, build_user_prompt
-from mogo.agent.schemas import GateResult
 from mogo.agent.tools import ToolBox
 from mogo.checks import CheckContext, CheckOutcome, enabled_checks, render_section, run_checks
 from mogo.config import RepoConfig, Settings
-from mogo.docker import compose_ready_url, docker_problem
+from mogo.docker import compose_ready_url, docker_requirement
 from mogo.context import ContextError, RunContext, load_context
 from mogo.github.app import repo_token as app_repo_token
 from mogo.github.client import GitHubClient, GitHubError, parse_pr_url
@@ -25,7 +24,6 @@ from mogo.llm.provider import LLMUnavailable, make_client, resolve_chain
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
 from mogo.profile.build import GitTree, Tree
-from mogo.profile.detect import install_command
 from mogo.profile.store import ensure_profile, save_profile_error
 from mogo.runner import sandbox
 from mogo.runner.review import render_summary, split_findings, verdict
@@ -115,8 +113,7 @@ def execute_run(
     workdir = Path(tempfile.mkdtemp(prefix="mogo-"))
     app: sandbox.AppProcess | None = None
     cfg: RepoConfig | None = None
-    services_started = False
-    start_attempted = False  # the app's start script ran (or tried to): its stop command must run
+    start_attempted = False  # the app's start command ran (or tried to): its stop command must run
     try:
         with sf() as s:
             run = s.get(Run, run_id)
@@ -170,41 +167,13 @@ def execute_run(
         root = workdir / "repo"
         checkout(owner, repo_name, number, token, root)
         rec("checked out PR branch")
+        if feature and (problem := docker_requirement(cfg, root)):
+            raise RunFailed(problem)
         builtin = _builtin_checks(rec, sf, ctx, gh, root, diff, owner, repo_name, token, base_tree)
 
-        setup = cfg.setup
-        if not setup and (detected := install_command({p.name for p in root.iterdir()})):
-            setup = [detected]
-            rec(f"install (from the lockfile): {detected}")
-        for cmd in setup:
-            code, out = sandbox.run_cmd(cmd, root, env=repo_env)
-            if code:
-                raise RunFailed(f"setup failed: `{cmd}`\n{sandbox.tail(out, 1500)}")
-        rec("setup done")
-
-        gates = []
-        for cmd in cfg.gates:
-            code, out = sandbox.run_cmd(cmd, root, env=repo_env)
-            gates.append(GateResult(cmd=cmd, ok=code == 0, output=sandbox.tail(out, 1500)))
-            if code:
-                rec(f"gate failed (exit {code}): `{cmd}`\n{sandbox.tail(out, 800)}", "warn")
-        if gates:
-            rec(f"gates: {sum(g.ok for g in gates)}/{len(gates)} passed")
-
-        app_status = "not started (review only)" if not feature else "no start command configured"
-        docker_error = docker_problem(cfg, root) if cfg.stack == "docker" else None
-        if feature and cfg.start and docker_error:
-            app_status = (
-                f"NOT started: the repo is set to run in Docker, but {docker_error}. "
-                "Report this as a blocker finding or unverified criteria."
-            )
-        elif feature and cfg.start:
+        app_status = "not started (review only)"
+        if feature:
             start_attempted = True
-            if cfg.services_cmd:
-                services_started = True
-                code, out = sandbox.run_cmd(cfg.services_cmd, root, env=repo_env)
-                if code:
-                    rec(f"services failed: {sandbox.tail(out, 500)}", "warn")
             prepared = True
             for cmd in cfg.prepare:
                 code, out = sandbox.run_cmd(cmd, root, env=repo_env)
@@ -215,14 +184,14 @@ def execute_run(
             if prepared:
                 # Any answer below 500 means "up": a health route for an API, the home page for a frontend.
                 ready_url = cfg.healthcheck
-                if not ready_url and cfg.stack == "docker" and cfg.docker_mode == "compose":
+                if not ready_url and cfg.docker_mode == "compose":
                     ready_url = compose_ready_url(cfg, root, repo_env, sandbox.run_cmd) or ""
                     if ready_url:
                         rec(f"ready URL, from the compose file: {ready_url}")
                 ready_url = ready_url or f"http://localhost:{repo_env.get('PORT') or 3000}"
                 app = sandbox.AppProcess(cfg.start, root, repo_env, ready_url)
                 if app.wait_healthy():
-                    app_status = f"running at {ready_url} (it answered). Test command: `{cfg.test_cmd or 'n/a'}`"
+                    app_status = f"running at {ready_url} (it answered)"
                 else:
                     log_tail = sandbox.tail(app.stop(), 1500)
                     app = None
@@ -235,7 +204,7 @@ def execute_run(
         user = build_user_prompt(
             title=pr["title"], body=pr.get("body") or "", feature=feature, diff=diff,
             conventions=_read_conventions(root, cfg.conventions), rules=cfg.rules,
-            gates=gates, app_status=app_status, notes=cfg.notes, project=ctx, builtin=builtin,
+            app_status=app_status, notes=cfg.notes, project=ctx, builtin=builtin,
         )
         # Each LLM gets the whole review; one that fails (unreachable, rejected, no report) hands over to the next.
         # Only LLM failures fall back: a bug anywhere else in the run is not the model's fault.
@@ -259,9 +228,9 @@ def execute_run(
         rec(f"agent done: {len(report.criteria)} criteria, {len(report.findings)} findings")
 
         inline, general = split_findings(report.findings, diff)
-        body = rec.redact(render_summary(report, gates, general, choice.label))
+        body = rec.redact(render_summary(report, general, choice.label))
         inline = rec.redact.deep(inline)
-        v = verdict(report, gates)
+        v = verdict(report)
         review_url = ""
         if dry:
             rec("dry run: review not posted")
@@ -279,8 +248,7 @@ def execute_run(
             review_url = res.get("html_url", "")
             rec(f"review posted: {review_url}")
         rec.update(status="succeeded", verdict=v, review_url=review_url,
-                   result={**report.model_dump(), "gates": [g.model_dump() for g in gates],
-                           "inline": len(inline), "summary_md": body})
+                   result={**report.model_dump(), "inline": len(inline), "summary_md": body})
     except Exception as e:  # noqa: BLE001 - last-resort handler, reported to Sentry via log.exception
         log.exception("run failed")
         sentry_sdk.capture_exception(e)
@@ -289,7 +257,7 @@ def execute_run(
     finally:
         if app:
             app.stop()
-        if (services_started or start_attempted) and cfg and cfg.services_down:
+        if start_attempted and cfg and cfg.services_down:
             # in the repo, like the start script: a compose file is found relative to it
             cwd = workdir / "repo" if (workdir / "repo").is_dir() else workdir
             code, out = sandbox.run_cmd(cfg.services_down, cwd, timeout=120, env=repo_env)

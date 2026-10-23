@@ -44,7 +44,8 @@ def test_redactor():
 
 def test_secrets_reach_commands_override_env_and_are_masked(settings, sf, tmp_path, monkeypatch):
     ids = seed_repos(sf, {"acme/api": RepoConfig(
-        name="acme/api", gates=[f'echo "$API_KEY $MODE" > {tmp_path}/env; echo "leak: $API_KEY"; exit 1'],
+        name="acme/api", start="python3 -m http.server 8781", healthcheck="http://localhost:8781",
+        prepare=[f'echo "$API_KEY $MODE" > {tmp_path}/env; echo "leak: $API_KEY"; exit 1'],
     )})
     rid_repo = ids["acme/api"]
     with sf() as s:
@@ -57,7 +58,7 @@ def test_secrets_reach_commands_override_env_and_are_masked(settings, sf, tmp_pa
         {"path": "src/svc.ts", "line": 2, "severity": "minor", "message": "prints dash-secret-value"}]}
     llm = FakeLLM([[tool_call("run_shell", {"command": "echo $API_KEY"})], [tool_call("submit_report", report, "c2")]])
     posted = []
-    rid = make_run(sf)
+    rid = make_run(sf, feature="thing works")
     execute_run(rid, settings, sf, gh=fake_github(posted), llm_factory=lambda _c: llm, checkout=fake_checkout)
 
     assert (tmp_path / "env").read_text().strip() == "dash-secret-value test"
@@ -94,10 +95,12 @@ def test_runner_credentials_never_reach_repo_commands(settings, sf, tmp_path, mo
     """Runner repo secrets are for the runner: a repo's commands get only its own env and secrets."""
     for name in ("GITHUB_APP_PRIVATE_KEY", "DATABASE_URL", "MOGO_SECRET_KEY", "API_JWT_SECRET"):
         monkeypatch.setenv(name, "runner-only-value")
-    seed_repos(sf, {"acme/api": RepoConfig(name="acme/api", gates=[f"env > {tmp_path}/env"])},
-               env={"acme/api": {"APP_MODE": "test"}})
+    seed_repos(sf, {"acme/api": RepoConfig(
+        name="acme/api", start="python3 -m http.server 8782", healthcheck="http://localhost:8782",
+        prepare=[f"env > {tmp_path}/env"],
+    )}, env={"acme/api": {"APP_MODE": "test"}})
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    execute_run(make_run(sf), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
+    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
                 checkout=fake_checkout)
     seen = (tmp_path / "env").read_text()
     assert "APP_MODE=test" in seen and "runner-only-value" not in seen
@@ -108,11 +111,13 @@ def test_a_repo_still_listing_env_from_gets_a_warning_not_the_values(settings, s
     monkeypatch.setenv("API_JWT_SECRET", "runner-only-value")
     ids = seed_repos(sf, {"acme/api": RepoConfig(name="acme/api")})
     with sf() as s:
-        s.get(Repo, ids["acme/api"]).config = {"gates": [f"env > {tmp_path}/env"],
+        s.get(Repo, ids["acme/api"]).config = {"start": "python3 -m http.server 8783",
+                                               "healthcheck": "http://localhost:8783",
+                                               "prepare": [f"env > {tmp_path}/env"],
                                                "env_from": {"JWT_SECRET": "API_JWT_SECRET", "SMTP": "SMTP"}}
         s.commit()
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    rid = make_run(sf)
+    rid = make_run(sf, feature="thing works")
     execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
     assert "runner-only-value" not in (tmp_path / "env").read_text()
     with sf() as s:

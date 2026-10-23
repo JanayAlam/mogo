@@ -33,7 +33,8 @@ def make_feature(sf, ids, api_url=API):
 @pytest.fixture
 def two_repos(sf):
     return seed_repos(sf, {
-        "acme/api": RepoConfig(name="acme/api", conventions=["CONVENTIONS.md"]),
+        "acme/api": RepoConfig(name="acme/api", conventions=["CONVENTIONS.md"], start="python3 -m http.server 8784",
+                               healthcheck="http://localhost:8784"),
         "acme/web": RepoConfig(name="acme/web"),
     }, roles={"acme/api": "backend", "acme/web": "admin-frontend"})
 
@@ -70,7 +71,7 @@ def test_invalid_stored_settings_are_reported(sf):
         p = Project(owner_id=seed_user(sf), name="X")
         s.add(p)
         s.flush()
-        s.add(Repo(project_id=p.id, full_name="acme/api", config={"gates": "pnpm lint"}))  # must be a list
+        s.add(Repo(project_id=p.id, full_name="acme/api", config={"rules": "no raw SQL"}))  # must be a list
         s.add(Run(id="r1", repo="acme/api", pr_url=API, pr_number=1))
         s.commit()
     with pytest.raises(ContextError, match="invalid"):
@@ -90,14 +91,14 @@ def test_import_reports_env_from_instead_of_storing_it(sf, tmp_path):
 
 def test_import_repos_is_idempotent(sf, tmp_path):
     f = tmp_path / "repos.yaml"
-    f.write_text("repos:\n  - name: acme/api\n    role: backend\n    gates: [make lint]\n")
+    f.write_text("repos:\n  - name: acme/api\n    role: backend\n    rules: [no raw SQL]\n")
     seed_user(sf)
     assert import_repos(sf, f, "Acme", "alice") == ["acme/api"]
-    f.write_text("repos:\n  - name: acme/api\n    role: backend\n    gates: [make check]\n")
+    f.write_text("repos:\n  - name: acme/api\n    role: backend\n    rules: [use services]\n")
     import_repos(sf, f, "acme", "ALICE", "Shop")
     with sf() as s:
         (p,), (r,) = s.query(Project).all(), s.query(Repo).all()
-        assert (p.description, r.role, r.config["gates"]) == ("Shop", "backend", ["make check"])
+        assert (p.description, r.role, r.config["rules"]) == ("Shop", "backend", ["use services"])
 
 
 def test_the_run_gets_the_owners_switched_on_connections_in_order(sf, two_repos):
@@ -126,3 +127,18 @@ def test_the_run_gets_the_owners_switched_on_connections_in_order(sf, two_repos)
             c.active = False
         s.commit()
     assert load_context(sf, rid).owner.connections == ()
+
+
+def test_settings_saved_before_docker_only_still_load(sf):
+    old = {"stack": "express", "setup": ["pnpm i"], "gates": ["pnpm lint"], "test_cmd": "pnpm test",
+           "services_cmd": "docker compose up -d db", "start": "pnpm dev", "docker_mode": "compose"}
+    with sf() as s:
+        p = Project(owner_id=seed_user(sf), name="X")
+        s.add(p)
+        s.flush()
+        s.add(Repo(project_id=p.id, full_name="acme/api", config=old))
+        s.add(Run(id="r1", repo="acme/api", pr_url=API, pr_number=1))
+        s.commit()
+    cfg = load_context(sf, "r1").cfg
+    assert (cfg.start, cfg.docker_mode) == ("pnpm dev", "compose")
+    assert not any(hasattr(cfg, k) for k in ("stack", "setup", "gates", "test_cmd", "services_cmd"))

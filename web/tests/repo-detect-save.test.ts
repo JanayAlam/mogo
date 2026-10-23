@@ -8,12 +8,12 @@ vi.mock('@/lib/github-app', () => ({ readRepoRoot: vi.fn() }))
 import { readRepoRoot } from '@/lib/github-app'
 import { detectRepo } from '@/lib/repo-detect'
 
-const express = (name: string) => (name === 'package.json' ? '{"dependencies":{"express":"4"},"scripts":{"dev":"tsx x.ts","lint":"eslint ."}}' : undefined)
+const files = (name: string) => (name === 'Dockerfile' ? 'FROM node\nEXPOSE 4000' : name === '.env.example' ? 'PORT=4000\nDB_URL=x' : undefined)
 const repo = () => ({ id: 'r1', full_name: 'acme/api', default_branch: 'main' })
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(readRepoRoot).mockResolvedValue({ names: new Set(['package.json', 'pnpm-lock.yaml']), read: express })
+  vi.mocked(readRepoRoot).mockResolvedValue({ names: new Set(['Dockerfile', 'compose.yaml', '.env.example', 'package.json']), read: files })
 })
 
 describe('detectRepo', () => {
@@ -28,24 +28,21 @@ describe('detectRepo', () => {
     expect(arg.where).toEqual({ repo_id: 'r1' })
     expect(Object.keys(arg.update)).toEqual(['suggestions']) // what the runner learned stays
     expect(arg.create).toMatchObject({ repo_id: 'r1' })
-    expect(arg.update.suggestions).toMatchObject({
-      stack: 'express', start: 'pnpm dev', package_manager: 'pnpm',
-      fields: { lint: 'pnpm lint', run: 'pnpm dev' },
+    expect(arg.update.suggestions).toEqual({
+      env_names: ['PORT', 'DB_URL'], dockerfile: true, docker_port: 4000, dockerfiles: ['Dockerfile'], compose_files: ['compose.yaml'],
     })
-    expect(arg.update.suggestions.scripts.map((s: { name: string }) => s.name)).toEqual(['dev', 'lint'])
   })
 
-  it('only suggests the type: it never sets or replaces the repo\'s own', async () => {
+  it("never writes the repo's own settings", async () => {
     await detectRepo('u', repo())
-    expect(update).not.toHaveBeenCalled() // the repo's settings are not written at all
-    expect(upsert.mock.calls[0][0].update.suggestions.stack).toBe('express') // it is in the suggestions
+    expect(update).not.toHaveBeenCalled()
   })
 
   it('saves the suggestions even when nothing is recognised, so the page knows it has looked', async () => {
     vi.mocked(readRepoRoot).mockResolvedValue({ names: new Set(['README.md']), read: () => undefined })
     await detectRepo('u', repo())
     expect(upsert).toHaveBeenCalled()
-    expect(upsert.mock.calls[0][0].update.suggestions.stack).toBe('')
+    expect(upsert.mock.calls[0][0].update.suggestions).toMatchObject({ dockerfiles: [], compose_files: [] })
   })
 
   it('does not write anything when GitHub cannot be read', async () => {

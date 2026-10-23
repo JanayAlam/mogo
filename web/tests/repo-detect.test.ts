@@ -35,23 +35,23 @@ describe('readRepoRoot', () => {
 
   it('lists the root files and reads only the ones the detection uses', async () => {
     const calls = stubContents(
-      { 'package.json': '{"scripts":{}}', 'pnpm-lock.yaml': 'big', README: 'x', Dockerfile: 'FROM x\nEXPOSE 80', '.env.example': 'A=1', '.env.sample': 'B=2' },
+      { 'package.json': '{"scripts":{}}', 'compose.yaml': 'big', README: 'x', Dockerfile: 'FROM x\nEXPOSE 80', '.env.example': 'A=1', '.env.sample': 'B=2' },
       ['src', 'docs'],
     )
     const { names, read } = await readRepoRoot('u', 'acme/api', 'main')
-    expect([...names].sort()).toEqual(['.env.example', '.env.sample', 'Dockerfile', 'README', 'package.json', 'pnpm-lock.yaml']) // not the folders
-    expect(read('package.json')).toBe('{"scripts":{}}')
+    expect([...names].sort()).toEqual(['.env.example', '.env.sample', 'Dockerfile', 'README', 'compose.yaml', 'package.json']) // not the folders
+    expect(read('package.json')).toBeUndefined() // nothing in it is used any more
     expect(read('Dockerfile')).toContain('EXPOSE 80')
     expect(read('.env.example')).toBe('A=1')
     expect(read('.env.sample')).toBeUndefined() // only the first env example, like the runner
-    expect(read('pnpm-lock.yaml')).toBeUndefined() // names matter, contents of a lockfile do not
-    expect(calls.map((c) => c.path).sort()).toEqual(['', '.env.example', 'Dockerfile', 'package.json'])
+    expect(read('compose.yaml')).toBeUndefined() // names matter, contents of a compose file do not
+    expect(calls.map((c) => c.path).sort()).toEqual(['', '.env.example', 'Dockerfile'])
     expect(calls[0].accept).toBe('application/vnd.github+json') // the listing
     expect(calls.slice(1).every((c) => c.accept === 'application/vnd.github.raw+json')).toBe(true) // raw text, not base64
   })
 
   it('asks for the branch and encodes it', async () => {
-    stubContents({ 'package.json': '{}' })
+    stubContents({ Dockerfile: 'FROM x' })
     await readRepoRoot('u', 'acme/api', 'feature/x y')
     const url = String(vi.mocked(fetch).mock.calls[0][0])
     expect(url).toContain('/repos/acme/api/contents')
@@ -59,8 +59,8 @@ describe('readRepoRoot', () => {
   })
 
   it('caps what it keeps of a huge file', async () => {
-    stubContents({ 'package.json': 'x'.repeat(400_000) })
-    expect((await readRepoRoot('u', 'acme/api', 'main')).read('package.json')).toHaveLength(300_000)
+    stubContents({ Dockerfile: 'x'.repeat(400_000) })
+    expect((await readRepoRoot('u', 'acme/api', 'main')).read('Dockerfile')).toHaveLength(300_000)
   })
 
   it('says so when the repo or branch cannot be read', async () => {

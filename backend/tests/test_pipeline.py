@@ -42,6 +42,7 @@ def fake_checkout(owner, repo, number, token, dest):
     (dest / "CONVENTIONS.md").write_text("Use services.")
     (dest / "src").mkdir()
     (dest / "src/svc.ts").write_text("import x\ndb.raw('select 1')\nexport {}\n")
+    (dest / "Dockerfile").write_text("FROM scratch\n")  # Mogo only runs projects with Docker
 
 
 def make_run(sf, **kw):
@@ -69,7 +70,7 @@ def run(settings, repos, sf, gh, run_id):
 
 def test_full_run_posts_inline_and_general(settings, repos, sf):
     posted = []
-    rid = run_id = make_run(sf, feature="thing works")
+    rid = run_id = make_run(sf)  # no feature: reviewed, not run
     run(settings, repos, sf, fake_github(posted), run_id)
 
     with sf() as s:
@@ -116,11 +117,11 @@ def test_fork_pr_is_refused(settings, repos, sf, monkeypatch):
         assert "fork" in s.get(Run, rid).error
 
 
-def test_services_are_started_and_stopped_around_the_run(settings, sf, tmp_path):
+def test_prepare_and_stop_commands_run_around_the_app(settings, sf, tmp_path):
     from mogo.config import RepoConfig
 
     cfg = {"acme/api": RepoConfig(
-        name="acme/api", services_cmd=f"touch {tmp_path}/up", services_down=f"touch {tmp_path}/down",
+        name="acme/api", prepare=[f"touch {tmp_path}/up"], services_down=f"touch {tmp_path}/down",
         start="python3 -m http.server 8765", healthcheck="http://localhost:8765",
     )}
     seed_repos(sf, cfg)
@@ -320,23 +321,47 @@ def _checkout_with_dockerfile(owner, repo, number, token, dest):
     (dest / "Dockerfile").write_text("FROM scratch\nEXPOSE 8769\n")
 
 
-def test_docker_without_a_dockerfile_is_not_started_and_the_agent_is_told(settings, sf, tmp_path):
-    from mogo.config import RepoConfig
-    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", start=f"touch {tmp_path}/started")}
+def _no_dockerfile(owner, repo, number, token, dest):
+    fake_checkout(owner, repo, number, token, dest)
+    (dest / "Dockerfile").unlink()
+
+
+def test_a_project_without_docker_files_fails_the_run_and_says_so(settings, sf, tmp_path):
+    cfg = {"acme/api": RepoConfig(name="acme/api", start=f"touch {tmp_path}/started")}
     seed_repos(sf, cfg)
     rid = make_run(sf, feature="thing works")
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=fake_checkout)
-    assert not (tmp_path / "started").exists()
-    assert "NOT started" in llm.first_user_prompt and "no Dockerfile" in llm.first_user_prompt
+    posted = []
+    execute_run(rid, settings, sf, gh=fake_github(posted), llm_factory=lambda _c: llm, checkout=_no_dockerfile)
+    assert not (tmp_path / "started").exists() and posted == []  # no app, no fallback review
     with sf() as s:
-        assert s.get(Run, rid).status == "succeeded"  # the review still happens
+        r = s.get(Run, rid)
+        assert r.status == "failed"
+        assert r.error.startswith("This project needs Docker to be run, but there is no Dockerfile at its root.")
+        assert "Docker Compose file" in r.error
+
+
+def test_a_repo_not_set_up_for_docker_fails_a_feature_run(settings, repos, sf):
+    rid = make_run(sf, feature="thing works")
+    run(settings, repos, sf, fake_github([]), rid)
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "failed" and "needs Docker" in r.error and "repo's settings" in r.error
+
+
+def test_a_review_without_a_feature_does_not_need_docker(settings, repos, sf):
+    rid = make_run(sf)
+    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm, checkout=_no_dockerfile)
+    assert "not started (review only)" in llm.first_user_prompt
+    with sf() as s:
+        assert s.get(Run, rid).status == "succeeded"
 
 
 def test_docker_with_a_dockerfile_starts_and_gets_the_variable_names(settings, sf, tmp_path):
     from mogo.config import RepoConfig
     cfg = {"acme/api": RepoConfig(
-        name="acme/api", stack="docker", healthcheck="http://localhost:8769",
+        name="acme/api", healthcheck="http://localhost:8769",
         start=f'echo "$MOGO_DOCKER_ENV" > {tmp_path}/flags; python3 -m http.server 8769',
     )}
     seed_repos(sf, cfg, env={"acme/api": {"APP_MODE": "test", "ZED": "1", "bad name; touch x": "no"}})
@@ -348,9 +373,9 @@ def test_docker_with_a_dockerfile_starts_and_gets_the_variable_names(settings, s
     assert "running at http://localhost:8769 (it answered)" in llm.first_user_prompt
 
 
-def test_the_stop_command_runs_after_a_start_script_without_services(settings, sf, tmp_path):
+def test_the_stop_command_runs_after_the_app_started(settings, sf, tmp_path):
     from mogo.config import RepoConfig
-    # how the web form saves a repo: the start script is `start`, there is no services_cmd
+    # how the web form saves a repo: the commands that start and stop it
     cfg = {"acme/api": RepoConfig(
         name="acme/api", start="python3 -m http.server 8770", healthcheck="http://localhost:8770",
         services_down=f"touch {tmp_path}/stopped",
@@ -379,7 +404,7 @@ def test_docker_with_its_own_file_name_is_found_by_that_name(settings, sf, tmp_p
         fake_checkout(owner, repo, number, token, dest)
         (dest / "Dockerfile.dev").write_text("FROM scratch\n")  # no plain Dockerfile
 
-    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", docker_file="Dockerfile.dev",
+    cfg = {"acme/api": RepoConfig(name="acme/api", docker_file="Dockerfile.dev",
                                   start="python3 -m http.server 8772", healthcheck="http://localhost:8772")}
     seed_repos(sf, cfg)
     llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
@@ -390,15 +415,15 @@ def test_docker_with_its_own_file_name_is_found_by_that_name(settings, sf, tmp_p
 
 
 def test_docker_without_the_named_file_says_which_file(settings, sf, tmp_path):
-    from mogo.config import RepoConfig
-    cfg = {"acme/api": RepoConfig(name="acme/api", stack="docker", docker_mode="compose", docker_file="stack.yml",
+    cfg = {"acme/api": RepoConfig(name="acme/api", docker_mode="compose", docker_file="stack.yml",
                                   start=f"touch {tmp_path}/started")}
     seed_repos(sf, cfg)
-    llm = FakeLLM([[tool_call("submit_report", {"summary": "ok"})]])
-    execute_run(make_run(sf, feature="thing works"), settings, sf, gh=fake_github([]), llm_factory=lambda _c: llm,
-                checkout=fake_checkout)
+    rid = make_run(sf, feature="thing works")
+    execute_run(rid, settings, sf, gh=fake_github([]), llm_factory=lambda _c: FakeLLM([]), checkout=fake_checkout)
     assert not (tmp_path / "started").exists()
-    assert "NOT started" in llm.first_user_prompt and "stack.yml" in llm.first_user_prompt
+    with sf() as s:
+        r = s.get(Run, rid)
+        assert r.status == "failed" and "there is no stack.yml at its root" in r.error
 
 
 def test_the_stop_command_runs_inside_the_repo(settings, sf, tmp_path):

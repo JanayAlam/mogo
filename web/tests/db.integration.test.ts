@@ -89,13 +89,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('queries (postgres)', () => {
   it('projects, repos and features with their latest runs, seen by their owner only', async () => {
     const { id: pid } = await insertProject(alice, { name: 'Integration', description: 'd' })
     const repo = (full_name: string, role: string, config = {}) => ({ full_name, role, default_branch: 'main', config })
-    const api = (await insertRepo(pid, alice, repo('acme/api', 'backend', { gates: ['x'] }), 5))!
+    const api = (await insertRepo(pid, alice, repo('acme/api', 'backend', { rules: ['x'] }), 5))!
     const web = (await insertRepo(pid, alice, repo('acme/web', 'frontend'), 5))!
     await expect(insertRepo(pid, alice, repo('acme/api', ''), 5)).rejects.toThrow('duplicate')
     expect(await insertRepo('00000000-0000-0000-0000-000000000000', alice, repo('a/b', ''), 5)).toBeNull()
     expect(await insertRepo(pid, bob, repo('bob/x', ''), 5)).toBeNull() // not bob's project
     expect(await updateRepo(api.id, bob, { role: 'hijacked' })).toBe(false)
-    await updateRepo(api.id, alice, { config: { gates: ['pnpm lint'] } })
+    await updateRepo(api.id, alice, { config: { rules: ['no console.log'] } })
     await setEnvVar(api.id, 'PORT', { value: '8000', sensitive: false })
     await setEnvVar(api.id, 'API_KEY', { value: 'plain-secret-1', sensitive: true })
     const stored = (await db().repoEnv.findUnique({ where: { repo_id_name: { repo_id: api.id, name: 'API_KEY' } } }))!
@@ -147,8 +147,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('queries (postgres)', () => {
     expect([(await getRepo(api.id, alice))!.installation_id, (await getRepo(web.id, alice))!.installation_id])
       .toEqual(['5', null])
 
-    expect((await getProject(pid, alice))!.repos.map((r) => [r.full_name, r.config.gates ?? []])).toEqual([
-      ['acme/api', ['pnpm lint']], ['acme/web', []],
+    expect((await getProject(pid, alice))!.repos.map((r) => [r.full_name, r.config.rules ?? []])).toEqual([
+      ['acme/api', ['no console.log']], ['acme/web', []],
     ])
 
     await expect(insertFeature(pid, alice, {

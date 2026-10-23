@@ -5,9 +5,8 @@ import { readRepoRoot } from '@/lib/github-app'
 import type { RepoRow } from '@/lib/projects'
 
 /**
- * Reads a repo's source of truth branch from GitHub (no runner) and stores what the detection suggests (type, scripts,
- * Docker files, checks, ...) in its profile, which the repo page shows. The detected type is only suggested there: a
- * repo's type is its own (Docker unless chosen otherwise), and detection never sets or replaces it.
+ * Reads a repo's source of truth branch from GitHub (no runner) and stores what the detection suggests (Docker files,
+ * the Dockerfile's port, variable names) in its profile, which the repo page shows.
  *
  * Only the suggestions are written: what the runner learns (folders, types) and when it learned it stay as they are.
  */

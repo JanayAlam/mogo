@@ -1,5 +1,5 @@
 import type { FeatureInput } from '@/lib/features'
-import { DOCKER_FILE_NAME, isStack, STACK_IDS } from '@/lib/stack'
+import { DOCKER_FILE_NAME } from '@/lib/stack'
 import { defaultRepoConfig } from '@/lib/repo-form'
 import { isProvider, PROVIDER_INFO, PROVIDERS, type Provider } from '@/lib/llm-providers'
 import { isInternalHost } from '@/lib/net-guard'
@@ -59,8 +59,8 @@ export function validateProjectInput(body: unknown, partial = false): Result<Pro
 
 // --- repos
 
-const LIST_KEYS = ['setup', 'gates', 'prepare', 'conventions', 'rules'] as const
-const TEXT_KEYS = ['test_cmd', 'services_cmd', 'services_down', 'start', 'healthcheck', 'notes'] as const
+const LIST_KEYS = ['prepare', 'conventions', 'rules'] as const
+const TEXT_KEYS = ['services_down', 'start', 'healthcheck', 'notes'] as const
 
 export function validateRepoConfig(c: unknown): Result<Partial<RepoConfig>> {
   if (!isObj(c)) return 'config must be an object'
@@ -83,39 +83,15 @@ export function validateRepoConfig(c: unknown): Result<Partial<RepoConfig>> {
     if (typeof c.allow_forks !== 'boolean') return 'config.allow_forks must be true or false'
     out.allow_forks = c.allow_forks
   }
-  if (c.stack !== undefined) {
-    if (c.stack !== '' && !isStack(c.stack)) return `config.stack must be empty or one of: ${STACK_IDS.join(', ')}`
-    out.stack = c.stack
-  }
   const extra = validateRunConfig(c)
   if (typeof extra === 'string') return extra
   Object.assign(out, extra)
   return out
 }
 
-const SCRIPT_TEXT = ['lint', 'typecheck', 'format', 'test', 'build', 'run'] as const
-const SCRIPT_LISTS = ['other', 'before'] as const
-
-/** The Node `scripts` fields and the Docker settings of a repo's config. */
+/** The Docker settings of a repo's config. Other keys (the removed stack, scripts, gates, ...) are dropped. */
 function validateRunConfig(c: Record<string, unknown>): Result<Partial<RepoConfig>> {
   const out: Partial<RepoConfig> = {}
-  if (c.scripts !== undefined) {
-    if (!isObj(c.scripts)) return 'config.scripts must be an object'
-    const sc: Record<string, unknown> = {}
-    for (const k of SCRIPT_TEXT) {
-      const v = c.scripts[k] ?? ''
-      if (typeof v !== 'string' || v.length > 4000) return `config.scripts.${k} must be a string`
-      sc[k] = v.trim()
-    }
-    for (const k of SCRIPT_LISTS) {
-      const v = c.scripts[k] ?? []
-      if (!Array.isArray(v) || v.length > 50 || !v.every((x) => typeof x === 'string' && x.length <= 4000)) {
-        return `config.scripts.${k} must be a list of strings`
-      }
-      sc[k] = v.map((x: string) => x.trim()).filter(Boolean)
-    }
-    out.scripts = sc as unknown as RepoConfig['scripts']
-  }
   if (c.docker_mode !== undefined) {
     if (c.docker_mode !== '' && c.docker_mode !== 'dockerfile' && c.docker_mode !== 'compose') {
       return "config.docker_mode must be 'dockerfile' or 'compose'"

@@ -5,7 +5,7 @@ from mogo.docker import docker_problem
 
 
 def cfg(**kw):
-    return RepoConfig(name="acme/api", stack="docker", **kw)
+    return RepoConfig(name="acme/api", **kw)
 
 
 def test_dockerfile_default_name(tmp_path):

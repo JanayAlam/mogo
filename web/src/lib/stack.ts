@@ -1,47 +1,9 @@
 /**
- * What kind of app a repo is: one pick per repo. It decides how the app is started, so each kind can carry its own
- * start configuration (`startPreset`). The ids are what is stored (repo config `stack`) and what the runner's
- * detection reports (backend/mogo/profile/detect.py `detect_stack`): change them in both places. Docker is never
- * detected: it is chosen, and needs a Dockerfile at the root of the repo.
- *
- * To support another kind, add it here (and teach detect_stack to recognise it, if it can be told from the files).
+ * How a repo is run: only with Docker. A repo needs a Compose file (the default) or a Dockerfile at its root; the
+ * runner builds and starts it from there and removes it when the run ends. There are no other kinds of app.
  */
-export const STACKS = {
-  nodejs: { label: 'Node.js (raw)', group: 'Node.js / TypeScript', port: 3000 },
-  express: { label: 'Express', group: 'Node.js / TypeScript', port: 3000 },
-  nestjs: { label: 'NestJS', group: 'Node.js / TypeScript', port: 3000 },
-  nextjs: { label: 'Next.js', group: 'Node.js / TypeScript', port: 3000 },
-  python: { label: 'Python (raw)', group: 'Python', port: 8000 },
-  fastapi: { label: 'FastAPI', group: 'Python', port: 8000 },
-  docker: { label: 'Docker', group: 'Container', port: 3000 },
-} as const satisfies Record<string, { label: string; group: string; port: number }>
-
-export type Stack = keyof typeof STACKS
-
-export const isStack = (v: unknown): v is Stack => typeof v === 'string' && Object.hasOwn(STACKS, v)
-export const STACK_IDS = Object.keys(STACKS) as Stack[]
-
-/** The kinds, in the order of STACKS, under their group headings. */
-export function stackGroups(): { label: string; stacks: { id: Stack; label: string }[] }[] {
-  const groups: { label: string; stacks: { id: Stack; label: string }[] }[] = []
-  for (const id of STACK_IDS) {
-    const { group, label } = STACKS[id]
-    const g = groups.find((x) => x.label === group) ?? groups[groups.push({ label: group, stacks: [] }) - 1]
-    g.stacks.push({ id, label })
-  }
-  return groups
-}
-
-/** Name for display. An id that is not in the catalog (an old or hand-edited value) shows as it is. */
-export const stackLabel = (id: string | undefined): string => (isStack(id) ? STACKS[id].label : (id ?? ''))
-
-/** The port a kind of app listens on by default. */
-export const defaultPort = (id: string): number => (isStack(id) ? STACKS[id].port : 3000)
-
-/** Node.js, TypeScript and JavaScript apps keep their commands in package.json scripts. */
-export const NODE_STACKS = ['nodejs', 'express', 'nestjs', 'nextjs'] as const satisfies readonly Stack[]
-export const isNodeStack = (id: string): boolean => (NODE_STACKS as readonly string[]).includes(id)
-export const isDockerStack = (id: string): boolean => id === 'docker'
+/** The port an app listens on when none is given. */
+export const DEFAULT_PORT = 3000
 
 // --- Docker
 
@@ -87,7 +49,7 @@ export function compileDocker(d: DockerSettings, appUrl: string): DockerCommands
       healthcheck: appUrl.trim(),
     }
   }
-  const port = d.port || defaultPort('docker')
+  const port = d.port || DEFAULT_PORT
   const f = d.file ? `-f ${d.file} ` : ''
   return {
     prepare: [`docker build ${f}-t ${DOCKER_NAME} .`],

@@ -26,6 +26,22 @@ def docker_problem(cfg: RepoConfig, root: Path) -> str | None:
     return None if (root / name).is_file() else f"there is no {name} at its root"
 
 
+def docker_requirement(cfg: RepoConfig, root: Path) -> str | None:
+    """Why a repo cannot be run, in words for the person who owns it, or None when Docker can start it. Mogo only runs
+    a project with Docker (a Dockerfile, or Docker Compose for several services): there is no other way."""
+    if not cfg.start:
+        return (
+            "This project needs Docker to be run: Mogo starts it from a Dockerfile, or from a Docker Compose file for "
+            "several services. Open the repo's settings, choose how it runs with Docker and save."
+        )
+    if problem := docker_problem(cfg, root):
+        return (
+            f"This project needs Docker to be run, but {problem}. Add a Dockerfile or a Docker Compose file to the "
+            "repo, or name the right file in the repo's settings."
+        )
+    return None
+
+
 def compose_ready_url(cfg: RepoConfig, root: Path, env: dict[str, str], run: Callable) -> str | None:
     """Where the app of a Compose repo answers, read from the compose file itself: the first port it publishes, taking
     a service that is built from the repo (the app) before one that only runs an image (a database). The file is

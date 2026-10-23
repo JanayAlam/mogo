@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, FileUp, Lock, Pencil, Plus, RefreshCw, Sparkles } from "lucide-react";
+import { FileUp, Lock, Pencil, Plus, RefreshCw } from "lucide-react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "nextjs-toploader/app";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -25,35 +25,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Repo } from "@/lib/client";
 import { looksSensitive, parseEnv } from "@/lib/dotenv";
 import type { EnvVarInfo } from "@/lib/env";
-import type { Suggestions } from "@/lib/projects";
-import { isDockerStack, isNodeStack, isStack, stackGroups, stackLabel } from "@/lib/stack";
-import { DockerCard, NodeChecksCard, NodeRunCard } from "@/components/repo-run-config";
+import { RunProjectCard } from "@/components/repo-run-config";
 import {
-  applySuggestions,
   configToForm,
   formError,
   formToConfig,
   legacyEnvFrom,
   type ConfigForm,
 } from "@/lib/repo-form";
-import { cn } from "@/lib/utils";
 
 const mono = "font-mono text-xs md:text-xs";
 const noSubscribe = () => () => {};
@@ -71,7 +57,7 @@ export function RepoSettings() {
   );
   const learning = waiting !== null && !!repo.data && stamp(repo.data) === waiting;
 
-  // Reads package.json, the Dockerfile and the like from GitHub (no runner) and refreshes the suggestions.
+  // Reads the Dockerfile, Compose files and .env.example from GitHub (no runner) and refreshes the suggestions.
   const read = async () => {
     try {
       await api.detectRepo(repoId);
@@ -81,13 +67,13 @@ export function RepoSettings() {
       toast.error("Could not read the repo from GitHub", { description: errorMessage(e) });
     }
   };
-  // A repo whose profile has no script list (added before scripts were read, or not learned yet) is read once on
-  // opening, so its dropdowns and type are there without anyone asking. A failure stays quiet: the dropdown offers it.
+  // A repo whose profile has no Docker file list (added before they were read, or not learned yet) is read once on
+  // opening, so its dropdown is there without anyone asking. A failure stays quiet: the dropdown offers it.
   const autoRead = useRef<string | null>(null);
   const reload = repo.reload;
   useEffect(() => {
     const r = repo.data;
-    if (!r || autoRead.current === r.id || r.profile?.suggestions?.scripts !== undefined) return;
+    if (!r || autoRead.current === r.id || r.profile?.suggestions?.dockerfiles !== undefined) return;
     autoRead.current = r.id;
     api.detectRepo(r.id).then(reload, () => {});
   }, [repo.data, reload]);
@@ -105,7 +91,6 @@ export function RepoSettings() {
             key={`${repo.data.id}:${repo.data.updated_at}`}
             repo={repo.data}
             projectId={id}
-            learning={learning}
             onSaved={repo.reload}
             onRead={read}
           />
@@ -129,13 +114,11 @@ export function RepoSettings() {
 function RepoForm({
   repo,
   projectId,
-  learning,
   onSaved,
   onRead,
 }: {
   repo: Repo;
   projectId: string;
-  learning: boolean;
   onSaved: () => void;
   onRead: () => Promise<void>;
 }) {
@@ -150,30 +133,11 @@ function RepoForm({
   const [role, setRole] = useState(base.role);
   const [branch, setBranch] = useState(base.branch);
   const [form, setForm] = useState<ConfigForm>(base.form);
-  const [advancedOpen, setAdvancedOpen] = useState(
-    () => !!(form.install || form.testCmd || form.stopCmd || form.allowForks),
-  );
   const legacy = legacyEnvFrom(repo.config);
   const suggestions = repo.profile?.suggestions;
   const save = useAction();
   const del = useAction();
   const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) => setForm((f) => ({ ...f, [k]: v }));
-
-  const setScript = <K extends keyof ConfigForm["scripts"]>(k: K, v: string) =>
-    setForm((f) => ({ ...f, scripts: { ...f.scripts, [k]: v } }));
-  // Choosing Docker starts from the port the Dockerfile exposes.
-  const chooseStack = (stack: string) =>
-    setForm((f) => ({
-      ...f,
-      stack,
-      dockerPort: f.dockerPort || (stack === "docker" && suggestions?.docker_port ? String(suggestions.docker_port) : ""),
-    }));
-  const node = isNodeStack(form.stack);
-  const docker = isDockerStack(form.stack);
-  // Checks and running only make sense once the repo says what it is: with no type the form asks for nothing yet.
-  const typed = form.stack !== "";
-  const generic = typed && !node && !docker; // Python: the generic Checks and Run the app form
-  const py = form.stack === "python" || form.stack === "fastapi"; // for the examples shown in it
 
   // Compared as saved, so whitespace-only edits are not changes. Leftover env_from is removed by saving.
   const payload = (r: string, b: string, f: ConfigForm) => ({
@@ -289,114 +253,13 @@ function RepoForm({
           </CardContent>
         </Card>
 
-        <StackCard
+        <RunProjectCard
           form={form}
           branch={repo.default_branch}
           suggestions={suggestions}
-          onChange={chooseStack}
+          onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          onRead={onRead}
         />
-
-        <Detected
-          branch={repo.default_branch}
-          learning={learning}
-          suggestions={suggestions}
-          form={form}
-          onApply={(s) => {
-            setForm((f) => applySuggestions(f, s));
-            toast.success("Detected settings filled in", {
-              description: "Review them, then Save.",
-            });
-          }}
-        />
-
-        {node && (
-          <>
-            <NodeChecksCard form={form} suggestions={suggestions} onChange={setScript} onRead={onRead} />
-            <NodeRunCard
-              form={form}
-              suggestions={suggestions}
-              onChange={setScript}
-              onUrl={(v) => set("appUrl", v)}
-              onRead={onRead}
-            />
-          </>
-        )}
-
-        {docker && (
-          <DockerCard
-            form={form}
-            branch={repo.default_branch}
-            suggestions={suggestions}
-            onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
-            onRead={onRead}
-          />
-        )}
-
-        {generic && (
-          <>
-          <Card>
-            <CardHeader>
-              <CardTitle>Checks</CardTitle>
-              <CardDescription>
-                Run on every review after installing dependencies, one command per line. Any failure requests changes.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                aria-label="Checks"
-                rows={Math.max(3, form.checks.split("\n").length + 1)}
-                className={mono}
-                value={form.checks}
-                onChange={(e) => set("checks", e.target.value)}
-                placeholder={py ? "ruff check .\nmypy ." : "pnpm lint\npnpm exec tsc --noEmit"}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
-              <div className="space-y-1.5">
-                <CardTitle>Run the app</CardTitle>
-                <CardDescription>
-                  Lets the agent try the feature over HTTP. Off: the PR is reviewed and checked, but not run.
-                </CardDescription>
-              </div>
-              <Switch aria-label="Run the app" checked={form.runApp} onCheckedChange={(v) => set("runApp", v)} />
-            </CardHeader>
-            {form.runApp && (
-              <CardContent className="grid gap-4">
-                <Field
-                  label="Start script"
-                  htmlFor="start"
-                  hint="One command per line. Earlier lines run first (start a database, migrate); the last line starts the app and keeps running."
-                >
-                  <Textarea
-                    id="start"
-                    rows={Math.max(3, form.startScript.split("\n").length + 1)}
-                    className={mono}
-                    value={form.startScript}
-                    onChange={(e) => set("startScript", e.target.value)}
-                    placeholder={py ? "docker compose up -d db\nalembic upgrade head\nuvicorn app.main:app" : "docker compose up -d db\npnpm prisma migrate deploy\npnpm dev"}
-                  />
-                </Field>
-                <Field
-                  label="Ready URL (optional)"
-                  htmlFor="app-url"
-                  hint="The agent starts once this answers. Any response counts, even a 404: use a health route for an API, the home page for a frontend. Empty: http://localhost:<PORT>, with this repo's PORT variable, else 3000."
-                >
-                  <Input
-                    id="app-url"
-                    className={mono}
-                    value={form.appUrl}
-                    onChange={(e) => set("appUrl", e.target.value)}
-                    placeholder={suggestions?.app_url || "http://localhost:3000"}
-                  />
-                </Field>
-              </CardContent>
-            )}
-          </Card>
-          </>
-        )}
 
         <Card>
           <CardHeader>
@@ -428,73 +291,17 @@ function RepoForm({
           </CardContent>
         </Card>
 
-        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-          <CollapsibleTrigger asChild>
-            <Button type="button" variant="ghost" className="px-0 hover:bg-transparent">
-              <ChevronDown className={cn("transition-transform", !advancedOpen && "-rotate-90")} />
-              Advanced
-            </Button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <Card className="mt-2">
-              <CardContent className="grid gap-4 p-6">
-                {typed && !docker && (
-                <Field
-                  label="Install command"
-                  htmlFor="install"
-                  hint="Leave empty to install from the lockfile (pnpm, yarn, npm, bun, uv, poetry or pip). One command per line."
-                >
-                  <Textarea
-                    id="install"
-                    rows={2}
-                    className={mono}
-                    value={form.install}
-                    onChange={(e) => set("install", e.target.value)}
-                    placeholder={suggestions?.install || "pnpm install --frozen-lockfile"}
-                  />
-                </Field>
-                )}
-                {generic && (
-                <Field
-                  label="Test command"
-                  htmlFor="test-cmd"
-                  hint="Tells the agent how to run the tests. Add it to Checks as well if failing tests should request changes."
-                >
-                  <Input
-                    id="test-cmd"
-                    className={mono}
-                    value={form.testCmd}
-                    onChange={(e) => set("testCmd", e.target.value)}
-                  />
-                </Field>
-                )}
-                {typed && !docker && (
-                <Field
-                  label="Stop command"
-                  htmlFor="stop-cmd"
-                  hint="Runs at the end, e.g. docker compose down. Only matters for local CLI runs: the Actions machine is thrown away."
-                >
-                  <Input
-                    id="stop-cmd"
-                    className={mono}
-                    value={form.stopCmd}
-                    onChange={(e) => set("stopCmd", e.target.value)}
-                  />
-                </Field>
-                )}
-                <div className="flex items-center gap-3">
-                  <Switch id="allow-forks" checked={form.allowForks} onCheckedChange={(v) => set("allowForks", v)} />
-                  <Label htmlFor="allow-forks">
-                    Allow PRs from forks{" "}
-                    <span className="font-normal text-muted-foreground">
-                      (their code can read this repo&apos;s environment variables)
-                    </span>
-                  </Label>
-                </div>
-              </CardContent>
-            </Card>
-          </CollapsibleContent>
-        </Collapsible>
+        <Card>
+          <CardContent className="flex items-center gap-3 p-6">
+            <Switch id="allow-forks" checked={form.allowForks} onCheckedChange={(v) => set("allowForks", v)} />
+            <Label htmlFor="allow-forks">
+              Allow PRs from forks{" "}
+              <span className="font-normal text-muted-foreground">
+                (their code can read this repo&apos;s environment variables)
+              </span>
+            </Label>
+          </CardContent>
+        </Card>
       </div>
 
       {dirty && (
@@ -535,134 +342,6 @@ function RepoForm({
         </>
       )}
     </form>
-  );
-}
-
-/** Settings read from the branch, offered while the form's checks and start script are still empty. */
-const NO_STACK = "none"; // a Select item cannot have an empty value
-
-/**
- * What kind of app the repo is (one pick). Detected from the source branch the first time it is read; it decides what
- * the rest of the form asks for (package.json scripts, or a Docker file).
- */
-function StackCard({
-  form,
-  suggestions,
-  onChange,
-}: {
-  form: ConfigForm;
-  branch: string;
-  suggestions: Suggestions | null | undefined;
-  onChange: (stack: string) => void;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Run the project</CardTitle>
-        <CardDescription>
-          How this repo is run. New repos run with Docker (Docker Compose by default); if the repo looks like something
-          else, it is suggested here. It decides how the app is checked and started.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        <Field label={<span className="sr-only">Run the project</span>} htmlFor="stack">
-          <Select value={form.stack || NO_STACK} onValueChange={(v) => onChange(v === NO_STACK ? "" : v)}>
-            <SelectTrigger id="stack" className="sm:max-w-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={NO_STACK}>Not set</SelectItem>
-              {stackGroups().map((g) => (
-                <SelectGroup key={g.label}>
-                  <SelectLabel>{g.label}</SelectLabel>
-                  {g.stacks.map((o) => (
-                    <SelectItem key={o.id} value={o.id}>
-                      {o.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        {!form.stack && (
-          <p className="text-sm text-muted-foreground">Choose a type to set up its checks and how the app runs.</p>
-        )}
-        {typeof suggestions?.stack === "string" && isStack(suggestions.stack) && suggestions.stack !== form.stack && (
-          <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-            <span>Detected from the repo: {stackLabel(suggestions.stack)}.</span>
-            <Button type="button" variant="outline" size="sm" onClick={() => onChange(suggestions.stack as string)}>
-              Use {stackLabel(suggestions.stack)}
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function Detected({
-  branch,
-  learning,
-  suggestions,
-  form,
-  onApply,
-}: {
-  branch: string;
-  learning: boolean;
-  suggestions: Suggestions | null | undefined;
-  form: ConfigForm;
-  onApply: (s: Suggestions) => void;
-}) {
-  if (learning) {
-    return (
-      <Card className="border-primary/30">
-        <CardContent className="flex items-center gap-3 p-4 text-sm text-muted-foreground">
-          <RefreshCw className="h-4 w-4 animate-spin text-primary" />
-          Reading {branch}: settings found in package.json and the lockfile will be suggested here.
-        </CardContent>
-      </Card>
-    );
-  }
-  const useful = suggestions && (suggestions.checks.length || suggestions.start || suggestions.test_cmd);
-  const filled = [form.checks, form.startScript, ...Object.values(form.scripts)].some((v) => v.trim());
-  if (!useful || filled || !form.stack || isDockerStack(form.stack)) return null;
-  const row = (label: string, value: string) =>
-    value && (
-      <div className="flex gap-3">
-        <span className="w-20 shrink-0 text-muted-foreground">{label}</span>
-        <code className="font-mono text-xs leading-5 whitespace-pre-wrap">{value}</code>
-      </div>
-    );
-  return (
-    <Card className="border-primary/40">
-      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
-        <div className="space-y-1.5">
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" /> Detected on {branch}
-          </CardTitle>
-          <CardDescription>
-            From package.json, the lockfile and .env.example. Nothing is saved until you click Save.
-          </CardDescription>
-        </div>
-        <Button type="button" onClick={() => onApply(suggestions)}>
-          Use these
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-1.5 text-sm">
-        {row("Install", suggestions.install && `${suggestions.install}  (automatic)`)}
-        {row("Checks", suggestions.checks.join("\n"))}
-        {row("Tests", suggestions.test_cmd)}
-        {row("Start", suggestions.start)}
-        {row("Ready URL", suggestions.app_url)}
-        {suggestions.env_names.length > 0 && (
-          <p className="pt-1 text-xs text-muted-foreground">
-            .env.example lists {suggestions.env_names.length} variables: import your .env under Environment variables
-            below.
-          </p>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
