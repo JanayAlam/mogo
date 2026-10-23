@@ -140,6 +140,44 @@ def test_long_convention_files_are_not_cut_at_6000_chars(tmp_path):
     assert _read_conventions(tmp_path, ["CLAUDE.md", "missing.md"]).endswith("END")
 
 
+def test_conventions_unset_reads_the_known_files_found(tmp_path):
+    from mogo.config import RepoConfig
+    from mogo.runner.pipeline import _read_conventions
+
+    (tmp_path / "AGENTS.md").write_text("agents rules")
+    (tmp_path / "CLAUDE.md").write_text("claude rules")
+    (tmp_path / "notes.md").write_text("not a known name")
+    cfg = RepoConfig(name="acme/api")
+    assert cfg.conventions is None
+    text = _read_conventions(tmp_path, cfg.conventions)
+    assert text.index("### CLAUDE.md") < text.index("### AGENTS.md") and "notes.md" not in text
+
+
+def test_conventions_set_are_read_exactly(tmp_path):
+    from mogo.runner.pipeline import _read_conventions
+
+    (tmp_path / "CLAUDE.md").write_text("claude rules")
+    (tmp_path / "notes.md").write_text("our notes")
+    text = _read_conventions(tmp_path, ["notes.md"])
+    assert "our notes" in text and "claude rules" not in text
+
+
+def test_an_empty_conventions_list_reads_nothing(tmp_path):
+    from mogo.runner.pipeline import _read_conventions
+
+    (tmp_path / "CLAUDE.md").write_text("claude rules")
+    assert _read_conventions(tmp_path, []) == ""
+
+
+def test_conventions_outside_the_checkout_are_not_read(tmp_path):
+    from mogo.runner.pipeline import _read_conventions
+
+    (tmp_path / "secret.md").write_text("outside")
+    root = tmp_path / "repo"
+    root.mkdir()
+    assert _read_conventions(root, ["../secret.md", str(tmp_path / "secret.md")]) == ""
+
+
 def _boot_cfg(tmp_path, **kw):
     from mogo.config import RepoConfig
 

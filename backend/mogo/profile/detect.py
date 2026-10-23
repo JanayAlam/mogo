@@ -1,5 +1,5 @@
 """Read a repo's own files and suggest its Docker run settings: the Dockerfile (and the port it EXPOSEs), the Compose
-files and the names in .env.example.
+files and the names in .env.example; and the files that tell the agent a repo's conventions (CLAUDE.md, ...).
 
 Only the repo root is read. A repo is run with Docker (a Dockerfile, or Docker Compose for several services), so
 nothing else about its language or tooling is looked at. The UI shows the result for the user to accept.
@@ -10,6 +10,10 @@ import re
 from typing import Callable
 
 ENV_EXAMPLES = (".env.example", ".env.sample", ".env.template", ".env.dist")
+
+# Files an agent or a team keeps its rules in, in the order they are read. The web app mirrors the list
+# (web/src/lib/detect.ts CONVENTION_FILES): change both.
+CONVENTION_FILES = ("CLAUDE.md", "AGENTS.md", "GEMINI.md", ".cursorrules", ".windsurfrules", "CONVENTIONS.md", "CONTRIBUTING.md")
 
 COMPOSE_NAMES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
 
@@ -28,6 +32,15 @@ def detect_docker(names: set[str], read: Callable[[str], str | None]) -> dict:
     return out
 
 
+def detect_conventions(names: set[str]) -> dict:
+    """`convention_files`: the known convention files at the root. `markdown_files`: every other root .md file, for
+    the repo page to offer."""
+    return {
+        "convention_files": [n for n in CONVENTION_FILES if n in names],
+        "markdown_files": sorted(n for n in names if n.endswith(".md") and n not in CONVENTION_FILES),
+    }
+
+
 def env_names(text: str) -> list[str]:
     names = []
     for line in text.splitlines():
@@ -41,4 +54,4 @@ def detect(names: set[str], read: Callable[[str], str | None]) -> dict:
     """Suggested settings. `names` are the file names at the repo root, `read(name)` returns a root file's text."""
     env_file = next((n for n in ENV_EXAMPLES if n in names), None)
     env_text = (read(env_file) or "") if env_file else ""
-    return {"env_names": env_names(env_text), **detect_docker(names, read)}
+    return {"env_names": env_names(env_text), **detect_docker(names, read), **detect_conventions(names)}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { configToForm, defaultRepoConfig, dockerPortHint, formError, formToConfig, legacyEnvFrom, type ConfigForm } from '@/lib/repo-form'
+import { configToForm, conventionFileError, defaultRepoConfig, dockerPortHint, formError, formToConfig, legacyEnvFrom, type ConfigForm } from '@/lib/repo-form'
 import { compileDocker, DOCKER_FILE_NAME } from '@/lib/stack'
 import { validateRepoConfig, validateRepoInput } from '@/lib/validate'
 
@@ -19,7 +19,6 @@ const OLD = {
   conventions: ['CLAUDE.md'],
   rules: ['no console.log'],
   notes: 'log in with OTP',
-  allow_forks: true,
   stack: 'express',
   scripts: { lint: 'pnpm lint' },
 }
@@ -83,10 +82,20 @@ describe('repo form: Docker only', () => {
     expect([c.docker_mode, c.docker_file, c.docker_port]).toEqual(['dockerfile', '', 8080])
     expect(c.start).toContain('-p 8080:8080')
   })
-  it('keeps conventions, rules, notes and allow_forks', () => {
-    const c = formToConfig(form({ conventions: 'CLAUDE.md\n', rules: 'a\n\nb', notes: 'n', allowForks: true }))
-    expect([c.conventions, c.rules, c.notes, c.allow_forks]).toEqual([['CLAUDE.md'], ['a', 'b'], 'n', true])
+  it('keeps conventions, rules and notes', () => {
+    const c = formToConfig(form({ conventions: ['CLAUDE.md'], rules: ['a', 'b'], notes: 'n' }))
+    expect([c.conventions, c.rules, c.notes]).toEqual([['CLAUDE.md'], ['a', 'b'], 'n'])
   })
+  it('convention files never saved stay unsaved (the runner finds them); an emptied list is saved as empty', () => {
+    expect(configToForm({}).conventions).toBeNull()
+    expect(formToConfig(configToForm({})).conventions).toBeUndefined()
+    expect(formToConfig(form({ conventions: [] })).conventions).toEqual([])
+  })
+  it.each([['CLAUDE.md', null], ['docs/RULES.md', null], ['', /path/], ['/etc/passwd', /inside/], ['../x.md', /inside/], ['a/../../x', /inside/], ['x'.repeat(501), /long/]])(
+    'convention file %j', (path, message) => {
+      if (message) expect(conventionFileError(path)).toMatch(message)
+      else expect(conventionFileError(path)).toBeNull()
+    })
   it('round-trips', () => {
     for (const patch of [{}, { dockerFile: 'x.yml', appUrl: 'http://localhost:4000' }, { dockerMode: 'dockerfile' as const, dockerPort: '8080' }]) {
       const f = form(patch)
@@ -104,7 +113,7 @@ describe('repo form: Docker only', () => {
   it('opens a config from before Docker-only as Compose, keeping what is still used', () => {
     const f = configToForm(OLD)
     expect(f).toEqual({
-      appUrl: '', conventions: 'CLAUDE.md', rules: 'no console.log', notes: 'log in with OTP', allowForks: true,
+      appUrl: '', conventions: ['CLAUDE.md'], rules: ['no console.log'], notes: 'log in with OTP',
       dockerMode: 'compose', dockerFile: '', dockerPort: '',
     })
     const c = formToConfig(f)
@@ -145,10 +154,16 @@ describe('validateRepoConfig: Docker settings', () => {
   it.each([[{ docker_mode: 'swarm' }], [{ docker_file: '../x' }], [{ docker_file: 'a b' }], [{ docker_file: 5 }],
     [{ docker_file: 'a'.repeat(101) }], [{ docker_port: -1 }], [{ docker_port: 65536 }], [{ docker_port: 1.5 }], [{ docker_port: '80' }]])(
     'rejects %j', (c) => expect(typeof validateRepoConfig(c)).toBe('string'))
+  it.each([[['/etc/passwd']], [['../x.md']], [['']]])('conventions %j: paths outside the repo are refused', (conventions) => {
+    const r = validateRepoConfig({ conventions })
+    // an empty entry is dropped, anything outside the repo is an error
+    if (conventions[0] === '') expect(r).toMatchObject({ conventions: [] })
+    else expect(typeof r).toBe('string')
+  })
   it('drops the removed keys instead of failing, so an old client or config still saves', () => {
     expect(validateRepoConfig(OLD)).toEqual({
       services_down: OLD.services_down, prepare: OLD.prepare, start: OLD.start, healthcheck: OLD.healthcheck,
-      conventions: OLD.conventions, rules: OLD.rules, notes: OLD.notes, allow_forks: true,
+      conventions: OLD.conventions, rules: OLD.rules, notes: OLD.notes,
     })
   })
 })

@@ -4,13 +4,6 @@ import { compileDocker, DEFAULT_PORT, DOCKER_FILE_NAME, type DockerMode } from '
 /** Repo roles the UI suggests. Any text is allowed: the LLM reads it as written. */
 export const ROLE_SUGGESTIONS = ['backend', 'frontend', 'admin-frontend', 'mobile', 'shared-lib', 'infra', 'worker']
 
-export const toLines = (v: string[] | undefined) => (v ?? []).join('\n')
-export const fromLines = (s: string) =>
-  s
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-
 /**
  * The repo form as the user sees it. A repo runs only with Docker: a Compose file or a Dockerfile at its root. The
  * commands that build, run and stop it are compiled from the Docker fields (see compileDocker); the runner only
@@ -18,10 +11,9 @@ export const fromLines = (s: string) =>
  */
 export interface ConfigForm {
   appUrl: string
-  conventions: string
-  rules: string
+  conventions: string[] | null // null: never saved, so the detected convention files are used (and offered as the value)
+  rules: string[]
   notes: string
-  allowForks: boolean
   dockerMode: DockerMode
   dockerFile: string // '' = the default name
   dockerPort: string // '' = the Dockerfile's / the usual port
@@ -38,10 +30,9 @@ export function configToForm(c: Partial<RepoConfig>): ConfigForm {
   const docker = !!c.docker_mode || /\bdocker\b/.test(c.start ?? '')
   return {
     appUrl: docker ? (c.healthcheck ?? '') : '',
-    conventions: toLines(c.conventions),
-    rules: toLines(c.rules),
+    conventions: c.conventions ?? null,
+    rules: c.rules ?? [],
     notes: c.notes ?? '',
-    allowForks: c.allow_forks ?? false,
     // Compose unless it is a Dockerfile (a Docker repo saved as commands only has no mode: its `docker run` says)
     dockerMode: c.docker_mode === 'dockerfile' || (!c.docker_mode && /\bdocker run\b/.test(c.start ?? '')) ? 'dockerfile' : 'compose',
     dockerFile: docker ? (c.docker_file ?? '') : '',
@@ -53,10 +44,9 @@ export function formToConfig(f: ConfigForm): Partial<RepoConfig> {
   const port = Number(f.dockerPort) || 0
   const d = compileDocker({ mode: f.dockerMode, file: f.dockerFile.trim(), port }, f.appUrl)
   return {
-    conventions: fromLines(f.conventions),
-    rules: fromLines(f.rules),
+    conventions: f.conventions ?? undefined, // not saved: the runner reads the known files it finds
+    rules: f.rules,
     notes: f.notes,
-    allow_forks: f.allowForks,
     prepare: d.prepare,
     start: d.start,
     healthcheck: d.healthcheck,
@@ -65,6 +55,16 @@ export function formToConfig(f: ConfigForm): Partial<RepoConfig> {
     docker_file: f.dockerFile.trim(),
     docker_port: f.dockerMode === 'dockerfile' ? port : 0,
   }
+}
+
+export const MAX_ENTRY_CHARS = 500
+
+/** Why `path` cannot be a convention file (a file inside the repo), or null. */
+export function conventionFileError(path: string): string | null {
+  if (!path) return 'Enter a file path.'
+  if (path.length > MAX_ENTRY_CHARS) return 'That path is too long.'
+  if (path.startsWith('/') || path.split('/').includes('..')) return 'Use a path inside the repo, like docs/RULES.md.'
+  return null
 }
 
 const URL_OK = /^https?:\/\/\S+$/

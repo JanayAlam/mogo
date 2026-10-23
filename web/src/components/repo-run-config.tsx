@@ -22,7 +22,7 @@ import { DEFAULT_COMPOSE_FILE, DEFAULT_DOCKERFILE, type DockerMode } from "@/lib
 const mono = "font-mono text-sm";
 
 /** What a suggestion dropdown says when it has nothing to list: not read yet (offer to read it), or really none. */
-function NoneKnown({
+export function NoneKnown({
   what,
   unread,
   empty,
@@ -128,7 +128,7 @@ export function RunProjectCard({
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="h-9 w-9 shrink-0"
+                    className="shrink-0"
                     aria-label="Files found in the repo"
                     title="Pick a file found at the repo root">
                     <ChevronDown />

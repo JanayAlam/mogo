@@ -11,7 +11,6 @@ export interface RepoConfig {
   conventions: string[]
   rules: string[]
   notes: string
-  allow_forks: boolean
   // The runner only executes commands: prepare, start, healthcheck and services_down are compiled from these.
   docker_mode: string // 'compose' (default) or 'dockerfile'
   docker_file: string // its name at the repo root; '' = the default
@@ -49,6 +48,8 @@ export interface Suggestions {
   compose_files?: string[]
   dockerfile?: boolean // a Dockerfile at the repo root
   docker_port?: number // its first EXPOSE, 0 when none
+  convention_files?: string[] // CLAUDE.md, AGENTS.md, ... found at the repo root
+  markdown_files?: string[] // every other .md file at the root
 }
 
 export interface ProjectSummary {

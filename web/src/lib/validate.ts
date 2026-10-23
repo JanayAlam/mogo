@@ -1,6 +1,6 @@
 import type { FeatureInput } from '@/lib/features'
 import { DOCKER_FILE_NAME } from '@/lib/stack'
-import { defaultRepoConfig } from '@/lib/repo-form'
+import { conventionFileError, defaultRepoConfig } from '@/lib/repo-form'
 import { isProvider, PROVIDER_INFO, PROVIDERS, type Provider } from '@/lib/llm-providers'
 import { isInternalHost } from '@/lib/net-guard'
 import type { RepoConfig, RepoInput } from '@/lib/projects'
@@ -73,15 +73,12 @@ export function validateRepoConfig(c: unknown): Result<Partial<RepoConfig>> {
     }
     out[k] = v.map((x: string) => x.trim()).filter(Boolean)
   }
+  if (out.conventions?.some((x) => conventionFileError(x))) return 'config.conventions must be file paths inside the repo'
   for (const k of TEXT_KEYS) {
     const v = c[k]
     if (v === undefined) continue
     if (typeof v !== 'string' || v.length > 10000) return `config.${k} must be a string`
     out[k] = v
-  }
-  if (c.allow_forks !== undefined) {
-    if (typeof c.allow_forks !== 'boolean') return 'config.allow_forks must be true or false'
-    out.allow_forks = c.allow_forks
   }
   const extra = validateRunConfig(c)
   if (typeof extra === 'string') return extra

@@ -15,9 +15,9 @@ def test_env_names_from_the_example_file():
     assert s["env_names"] == ["PORT", "DATABASE_URL", "JWT_SECRET"]
 
 
-def test_only_docker_things_are_suggested():
+def test_only_docker_and_convention_things_are_suggested():
     s = run_detect({"package.json": "{}", "pnpm-lock.yaml": "", "Dockerfile": "FROM node\n"})
-    assert set(s) == {"env_names", "dockerfile", "docker_port", "dockerfiles", "compose_files"}
+    assert set(s) == {"env_names", "dockerfile", "docker_port", "dockerfiles", "compose_files", "convention_files", "markdown_files"}
 
 
 def test_profile_carries_suggestions(tmp_path):
@@ -75,3 +75,14 @@ def test_detection_matches_the_shared_cases():
     assert len(cases) >= 10
     for c in cases:
         assert run_detect(c["files"]) == c["expected"], c["name"]
+
+
+def test_convention_files_are_the_known_ones_in_reading_order():
+    s = run_detect({"AGENTS.md": "", "README.md": "", "CLAUDE.md": "", ".cursorrules": "", "docs.md": "", "claude.md": ""})
+    assert s["convention_files"] == ["CLAUDE.md", "AGENTS.md", ".cursorrules"]
+    assert s["markdown_files"] == ["README.md", "claude.md", "docs.md"]  # the rest, for the dropdown
+
+
+def test_no_convention_files():
+    s = run_detect({"Dockerfile": ""})
+    assert (s["convention_files"], s["markdown_files"]) == ([], [])

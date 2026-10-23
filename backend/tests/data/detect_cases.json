@@ -9,7 +9,11 @@
    "dockerfile": false,
    "docker_port": 0,
    "dockerfiles": [],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": [
+    "README.md"
+   ]
   }
  },
  {
@@ -23,7 +27,9 @@
    "dockerfile": false,
    "docker_port": 0,
    "dockerfiles": [],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -38,7 +44,9 @@
    "dockerfiles": [
     "Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -53,7 +61,9 @@
    "dockerfiles": [
     "Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -68,7 +78,9 @@
    "dockerfiles": [
     "Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -83,7 +95,9 @@
    "dockerfiles": [
     "Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -103,7 +117,11 @@
     "Dockerfile.dev",
     "api.Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": [
+    "notes.md"
+   ]
   }
  },
  {
@@ -123,7 +141,9 @@
     "compose.yml",
     "docker-compose.prod.yml",
     "docker-compose.yaml"
-   ]
+   ],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -141,7 +161,9 @@
    ],
    "compose_files": [
     "docker-compose.yaml"
-   ]
+   ],
+   "convention_files": [],
+   "markdown_files": []
   }
  },
  {
@@ -159,7 +181,38 @@
    "dockerfile": false,
    "docker_port": 0,
    "dockerfiles": [],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
+  }
+ },
+ {
+  "name": "convention files",
+  "files": {
+   "AGENTS.md": "",
+   "README.md": "",
+   "CLAUDE.md": "",
+   ".cursorrules": "",
+   "docs.md": "",
+   "claude.md": "",
+   "src": ""
+  },
+  "expected": {
+   "env_names": [],
+   "dockerfile": false,
+   "docker_port": 0,
+   "dockerfiles": [],
+   "compose_files": [],
+   "convention_files": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".cursorrules"
+   ],
+   "markdown_files": [
+    "README.md",
+    "claude.md",
+    "docs.md"
+   ]
   }
  },
  {
@@ -179,7 +232,9 @@
    "dockerfiles": [
     "Dockerfile"
    ],
-   "compose_files": []
+   "compose_files": [],
+   "convention_files": [],
+   "markdown_files": []
   }
  }
 ]

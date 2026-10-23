@@ -27,6 +27,7 @@ CASES = {
     "compose names": {"docker-compose.yaml": "", "compose.yml": "", "docker-compose.prod.yml": "", "package.json": "{}"},
     "dockerfile and compose": {"Dockerfile.dev": "FROM node\n", "docker-compose.yaml": "services: {}\n"},
     "env example variants": {"package.json": "{}", ".env.sample": "A=1\r\nexport B = 2\r\n# C=3\r\n  D=4\r\nA=9\r\n"},
+    "convention files": {"AGENTS.md": "", "README.md": "", "CLAUDE.md": "", ".cursorrules": "", "docs.md": "", "claude.md": "", "src": ""},
     "env example next to docker": {"Dockerfile": "FROM x\nEXPOSE 3000\n", ".env.example": "# server\nPORT=8000\nDATABASE_URL=\nexport JWT_SECRET=x\n"},
 }
 

@@ -28,10 +28,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { api, type Repo } from "@/lib/client";
 import { looksSensitive, parseEnv } from "@/lib/dotenv";
 import type { EnvVarInfo } from "@/lib/env";
+import { AgentNotesCard } from "@/components/agent-notes";
 import { RunProjectCard } from "@/components/repo-run-config";
 import {
   configToForm,
@@ -41,7 +41,6 @@ import {
   type ConfigForm,
 } from "@/lib/repo-form";
 
-const mono = "font-mono text-xs md:text-xs";
 const noSubscribe = () => () => {};
 
 export function RepoSettings() {
@@ -73,7 +72,7 @@ export function RepoSettings() {
   const reload = repo.reload;
   useEffect(() => {
     const r = repo.data;
-    if (!r || autoRead.current === r.id || r.profile?.suggestions?.dockerfiles !== undefined) return;
+    if (!r || autoRead.current === r.id || r.profile?.suggestions?.convention_files !== undefined) return;
     autoRead.current = r.id;
     api.detectRepo(r.id).then(reload, () => {});
   }, [repo.data, reload]);
@@ -132,12 +131,19 @@ function RepoForm({
   }));
   const [role, setRole] = useState(base.role);
   const [branch, setBranch] = useState(base.branch);
-  const [form, setForm] = useState<ConfigForm>(base.form);
+  const [rawForm, setForm] = useState<ConfigForm>(base.form);
   const legacy = legacyEnvFrom(repo.config);
   const suggestions = repo.profile?.suggestions;
   const save = useAction();
   const del = useAction();
-  const set = <K extends keyof ConfigForm>(k: K, v: ConfigForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Convention files never saved for this repo (null): the ones found in it are the starting value, in the saved
+  // state too (so it is not a change), and are kept only when the user saves. Editing the list replaces it.
+  const detected = suggestions?.convention_files;
+  const withDetected = (f: ConfigForm): ConfigForm =>
+    f.conventions === null && detected ? { ...f, conventions: detected } : f;
+  const form = withDetected(rawForm);
+  const saved = withDetected(base.form);
 
   // Compared as saved, so whitespace-only edits are not changes. Leftover env_from is removed by saving.
   const payload = (r: string, b: string, f: ConfigForm) => ({
@@ -147,7 +153,7 @@ function RepoForm({
   });
   const dirty =
     legacy.length > 0 ||
-    JSON.stringify(payload(role, branch, form)) !== JSON.stringify(payload(base.role, base.branch, base.form));
+    JSON.stringify(payload(role, branch, form)) !== JSON.stringify(payload(base.role, base.branch, saved));
 
   // Shortcut label: "Ctrl S" on the server, the platform's own in the browser (no hydration mismatch).
   const shortcut = useSyncExternalStore(
@@ -261,47 +267,13 @@ function RepoForm({
           onRead={onRead}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Agent notes</CardTitle>
-            <CardDescription>
-              Read by the agent on top of the project description, the feature and this repo&apos;s role.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4">
-            <Field
-              label="Convention files"
-              htmlFor="conventions"
-              hint="Paths in the repo, one per line, e.g. CLAUDE.md"
-            >
-              <Textarea
-                id="conventions"
-                rows={2}
-                className={mono}
-                value={form.conventions}
-                onChange={(e) => set("conventions", e.target.value)}
-              />
-            </Field>
-            <Field label="Extra rules" htmlFor="rules" hint="One rule per line">
-              <Textarea id="rules" rows={2} value={form.rules} onChange={(e) => set("rules", e.target.value)} />
-            </Field>
-            <Field label="Testing notes" htmlFor="notes" hint="Accounts, how to log in, known limits">
-              <Textarea id="notes" rows={5} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
-            </Field>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="flex items-center gap-3 p-6">
-            <Switch id="allow-forks" checked={form.allowForks} onCheckedChange={(v) => set("allowForks", v)} />
-            <Label htmlFor="allow-forks">
-              Allow PRs from forks{" "}
-              <span className="font-normal text-muted-foreground">
-                (their code can read this repo&apos;s environment variables)
-              </span>
-            </Label>
-          </CardContent>
-        </Card>
+        <AgentNotesCard
+          form={form}
+          branch={repo.default_branch}
+          suggestions={suggestions}
+          onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
+          onRead={onRead}
+        />
       </div>
 
       {dirty && (

@@ -31,11 +31,18 @@ describe('pieces', () => {
   it('Docker files: the default Dockerfile and its port, every Dockerfile and Compose name', () => {
     const files = { Dockerfile: 'FROM x\nEXPOSE 8080', 'Dockerfile.dev': '', 'compose.yml': '', 'docker-compose.prod.yaml': '', 'compose.txt': '' }
     expect(run(files)).toEqual({
-      env_names: [], dockerfile: true, docker_port: 8080,
+      env_names: [], dockerfile: true, docker_port: 8080, convention_files: [], markdown_files: [],
       dockerfiles: ['Dockerfile', 'Dockerfile.dev'], compose_files: ['compose.yml', 'docker-compose.prod.yaml'],
     })
   })
   it('nothing recognised: nothing suggested', () => {
-    expect(run({ 'README.md': '' })).toEqual({ env_names: [], dockerfile: false, docker_port: 0, dockerfiles: [], compose_files: [] })
+    expect(run({ 'README.md': '' })).toEqual({
+      env_names: [], dockerfile: false, docker_port: 0, dockerfiles: [], compose_files: [],
+      convention_files: [], markdown_files: ['README.md'],
+    })
+  })
+  it('convention files: the known ones in reading order, every other .md for the dropdown', () => {
+    const r = run({ 'AGENTS.md': '', 'README.md': '', 'CLAUDE.md': '', '.cursorrules': '', 'docs.md': '' })
+    expect([r.convention_files, r.markdown_files]).toEqual([['CLAUDE.md', 'AGENTS.md', '.cursorrules'], ['README.md', 'docs.md']])
   })
 })

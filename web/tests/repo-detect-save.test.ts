@@ -30,6 +30,7 @@ describe('detectRepo', () => {
     expect(arg.create).toMatchObject({ repo_id: 'r1' })
     expect(arg.update.suggestions).toEqual({
       env_names: ['PORT', 'DB_URL'], dockerfile: true, docker_port: 4000, dockerfiles: ['Dockerfile'], compose_files: ['compose.yaml'],
+      convention_files: [], markdown_files: [],
     })
   })
 

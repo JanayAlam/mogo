@@ -81,10 +81,9 @@ class RepoConfig(BaseModel):
     prepare: list[str] = Field(default_factory=list)  # before start: build and bring up the containers
     start: str = ""
     healthcheck: str = ""
-    conventions: list[str] = Field(default_factory=list)
+    conventions: list[str] | None = None  # files read as the repo's conventions; None (never saved): the known ones found
     rules: list[str] = Field(default_factory=list)
     notes: str = ""  # shown to the agent verbatim: seeded accounts, how to log in, known limits
-    allow_forks: bool = False
     docker_mode: str = ""  # "dockerfile" (default) or "compose": what a Docker repo runs
     docker_file: str = ""  # its file name at the repo root; empty: the default name(s)
     docker_port: int = 0  # the port a Dockerfile app is published on

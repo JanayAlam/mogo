@@ -24,6 +24,7 @@ from mogo.llm.provider import LLMUnavailable, make_client, resolve_chain
 from mogo.logging_setup import set_run_context
 from mogo.models import Run, RunEvent
 from mogo.profile.build import GitTree, Tree
+from mogo.profile.detect import CONVENTION_FILES
 from mogo.profile.store import ensure_profile, save_profile_error
 from mogo.runner import sandbox
 from mogo.runner.review import render_summary, split_findings, verdict
@@ -63,11 +64,14 @@ class _Recorder:
 CONVENTION_FILE_LIMIT = 20000
 
 
-def _read_conventions(root: Path, names: list[str]) -> str:
+def _read_conventions(root: Path, names: list[str] | None) -> str:
+    """The convention files' text. `names` None (never set in the repo settings): the known ones found at the root."""
+    if names is None:
+        names = [n for n in CONVENTION_FILES if (root / n).is_file()]
     chunks = []
     for n in names:
-        p = root / n
-        if p.is_file():
+        p = (root / n).resolve()
+        if p.is_relative_to(root.resolve()) and p.is_file():  # a name like ../x or /etc/passwd is not read
             chunks.append(f"### {n}\n{p.read_text(errors='replace')[:CONVENTION_FILE_LIMIT]}")
     return "\n\n".join(chunks)
 
@@ -159,8 +163,8 @@ def execute_run(
 
         pr = gh.get_pr(owner, repo_name, number)
         head_repo = (pr.get("head", {}).get("repo") or {}).get("full_name", "").lower()
-        if head_repo != f"{owner}/{repo_name}".lower() and not cfg.allow_forks:
-            raise RunFailed("PR comes from a fork; enable allow_forks in the repo settings to run it")
+        if head_repo != f"{owner}/{repo_name}".lower():
+            raise RunFailed("PR comes from a fork; Mogo only runs PRs from branches of the repo itself")
         diff = gh.get_diff(owner, repo_name, number)
         rec(f"PR #{number} '{pr['title']}': {len(diff)} bytes of diff")
 
